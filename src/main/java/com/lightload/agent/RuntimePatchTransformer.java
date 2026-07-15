@@ -23,12 +23,12 @@ import java.util.concurrent.ConcurrentHashMap;
 
 final class RuntimePatchTransformer implements ClassFileTransformer {
     static final String ACCESS_TRANSFORMER_LIST =
-            "net/minecraftforge/accesstransformer/parser/AccessTransformerList";
+            "net/neoforged/accesstransformer/parser/AccessTransformerList";
     static final String MIXIN_BYTECODE = "org/spongepowered/asm/util/Bytecode";
     static final String MIXIN_PROCESSOR = "org/spongepowered/asm/mixin/transformer/MixinProcessor";
     static final String RESOURCE_LOCATION = "net/minecraft/resources/ResourceLocation";
     static final String MOD_JAR_METADATA =
-            "net/minecraftforge/fml/loading/moddiscovery/ModJarMetadata";
+            "net/neoforged/fml/loading/moddiscovery/ModJarMetadata";
     static final String JDK_MODULE_RESOLVER = "java/lang/module/Resolver";
     private static final String HOOKS = "com/lightload/agent/RuntimeTransformationHooks";
     private static final String TYPE_DESCRIPTOR = "Lorg/objectweb/asm/Type;";
@@ -56,9 +56,8 @@ final class RuntimePatchTransformer implements ClassFileTransformer {
                 && Boolean.parseBoolean(System.getProperty("lightload.runtimePatch.oculusPath.enabled", "true"))) {
             return transformOculusResourceLocation(module, classfileBuffer);
         }
-        if (MOD_JAR_METADATA.equals(className)) {
-            return transformModJarMetadata(module, classfileBuffer);
-        }
+        // NeoForge 1.21.1 uses computeDescriptor() and JarContents#getPackagesExcluding().
+        // The Forge descriptor() package-cache rewrite is intentionally not applied.
         if (JDK_MODULE_RESOLVER.equals(className)) {
             return transformModuleResolver(module, classfileBuffer);
         }
@@ -167,7 +166,7 @@ final class RuntimePatchTransformer implements ClassFileTransformer {
                     .findFirst().orElse(null);
             MethodNode contains = find(node, "containsClassTarget", "(" + TYPE_DESCRIPTOR + ")Z");
             MethodNode get = find(node, "getTransformersForTarget", "(" + TYPE_DESCRIPTOR + ")Ljava/util/Map;");
-            MethodNode load = find(node, "loadFromPath", "(Ljava/nio/file/Path;Ljava/lang/String;)V");
+            MethodNode load = find(node, "loadFromPath", "(Ljava/nio/file/Path;)V");
             if (field == null || contains == null || get == null || load == null) {
                 System.setProperty("lightload.runtimeAgent.status", "unsupported-access-transformer");
                 return null;

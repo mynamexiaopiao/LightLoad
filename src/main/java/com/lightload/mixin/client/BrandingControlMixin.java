@@ -1,8 +1,8 @@
 package com.lightload.mixin.client;
 
 import com.lightload.core.StartupCoordinator;
-import net.minecraftforge.common.ForgeI18n;
-import net.minecraftforge.internal.BrandingControl;
+import net.neoforged.fml.i18n.FMLTranslations;
+import net.neoforged.neoforge.internal.BrandingControl;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -18,7 +18,7 @@ public abstract class BrandingControlMixin {
                                                   CallbackInfoReturnable<List<String>> cir) {
         if (!StartupCoordinator.shouldShowLoadingTime()) return;
 
-        String startupTime = ForgeI18n.parseMessage(
+        String startupTime = FMLTranslations.parseMessage(
                 "lightload.startup_time",
                 StartupCoordinator.completedStartupTimeText()
         );

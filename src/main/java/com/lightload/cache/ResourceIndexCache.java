@@ -6,9 +6,9 @@ import com.lightload.core.CompatibilityManager;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.IoSupplier;
-import net.minecraftforge.fml.loading.FMLLoader;
-import net.minecraftforge.forgespi.locating.IModFile;
-import net.minecraftforge.resource.PathPackResources;
+import net.neoforged.fml.loading.FMLLoader;
+import net.neoforged.neoforgespi.locating.IModFile;
+import net.minecraft.server.packs.PathPackResources;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -150,6 +150,17 @@ public final class ResourceIndexCache {
         String pathHash = Integer.toUnsignedString(fingerprint.get().source().hashCode(), 16);
         bindings.put(pack, new PackBinding(
                 sanitize(module + version + "-" + baseName + "-" + pathHash), fingerprint.get()));
+        runtimePacks.remove(pack);
+    }
+
+    /** Binds a stable source path for tests and non-mod path packs created by integrations. */
+    public void bindSource(PathPackResources pack, Path source) {
+        Optional<PackFingerprint> fingerprint = PackFingerprint.create(pack.packId(), source);
+        if (fingerprint.isEmpty()) return;
+        String baseName = fileBaseName(source);
+        String pathHash = Integer.toUnsignedString(fingerprint.get().source().hashCode(), 16);
+        bindings.put(pack, new PackBinding(
+                sanitize(pack.packId() + "-" + baseName + "-" + pathHash), fingerprint.get()));
         runtimePacks.remove(pack);
     }
 
@@ -396,14 +407,10 @@ public final class ResourceIndexCache {
 
     private Optional<RuntimePack> createRuntimePack(PathPackResources pack) {
         PackBinding binding = bindings.get(pack);
-        Optional<PackFingerprint> fingerprint = binding == null
-                ? PackFingerprint.create(pack.packId(), pack.getSource())
-                : Optional.of(binding.fingerprint());
-        if (fingerprint.isEmpty()) return Optional.empty();
-        String id = binding == null
-                ? sanitize(pack.packId() + "-" + Integer.toUnsignedString(fingerprint.get().source().hashCode(), 16))
-                : binding.cacheId();
-        RuntimePack runtime = new RuntimePack(id, fingerprint.get());
+        // Since 1.21.1 PathPackResources no longer exposes its root path. Only packs
+        // explicitly bound to a mod file have a stable, fingerprintable identity.
+        if (binding == null) return Optional.empty();
+        RuntimePack runtime = new RuntimePack(binding.cacheId(), binding.fingerprint());
         if (config.persistentCache()) {
             runtime.pathsLoad = pathIndexEnabled()
                     ? persistedPaths.thenAccept(paths -> loadPaths(runtime, paths))
@@ -626,7 +633,7 @@ public final class ResourceIndexCache {
 
     private static String forgeVersion() {
         try {
-            return FMLLoader.versionInfo() == null ? "unknown" : FMLLoader.versionInfo().forgeVersion();
+            return FMLLoader.versionInfo() == null ? "unknown" : FMLLoader.versionInfo().neoForgeVersion();
         } catch (RuntimeException ignored) {
             return "unknown";
         }

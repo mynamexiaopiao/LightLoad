@@ -1,6 +1,6 @@
 package com.lightload.core;
 
-import net.minecraftforge.forgespi.locating.IModFile;
+import net.neoforged.neoforgespi.locating.IModFile;
 
 public interface ModFileBackedResourcePack {
     void lightload$bindModFile(IModFile modFile);

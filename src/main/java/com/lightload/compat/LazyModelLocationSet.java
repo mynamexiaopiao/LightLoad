@@ -30,7 +30,7 @@ public final class LazyModelLocationSet extends AbstractSet<ResourceLocation> {
     public synchronized Set<ResourceLocation> select(Predicate<ResourceLocation> predicate) {
         Set<String> visibleNamespaces = new LinkedHashSet<>();
         for (String namespace : allNamespaces) {
-            if (predicate.test(new ResourceLocation(namespace, "lightload_namespace_probe"))) {
+            if (predicate.test(ResourceLocation.fromNamespaceAndPath(namespace, "lightload_namespace_probe"))) {
                 visibleNamespaces.add(namespace);
             }
         }
@@ -79,7 +79,7 @@ public final class LazyModelLocationSet extends AbstractSet<ResourceLocation> {
         BuiltInRegistries.ITEM.keySet().forEach(key -> {
             ResourceLocation itemId = key;
             if (missing.contains(itemId.getNamespace())) {
-                addGenerated(new ModelResourceLocation(itemId, "inventory"));
+                addGenerated(ModelResourceLocation.inventory(itemId));
             }
         });
         generatedNamespaces.addAll(missing);
@@ -87,6 +87,12 @@ public final class LazyModelLocationSet extends AbstractSet<ResourceLocation> {
 
     private void addGenerated(ResourceLocation location) {
         if (locations.add(location)) remember(location);
+    }
+
+    private void addGenerated(ModelResourceLocation location) {
+        // ModelResourceLocation became a record in 1.21.1; this index groups models
+        // by their underlying resource id, so the variant is not part of its key.
+        addGenerated(location.id());
     }
 
     private void remember(ResourceLocation location) {

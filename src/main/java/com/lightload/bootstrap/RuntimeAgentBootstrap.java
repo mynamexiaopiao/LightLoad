@@ -85,10 +85,23 @@ public final class RuntimeAgentBootstrap {
 
     private static boolean enabled(Path gameDirectory) {
         Properties properties = new Properties();
-        Path path = gameDirectory.resolve("config").resolve("lightload.properties");
+        Path path = gameDirectory.resolve("config").resolve("lightload-client.toml");
         if (Files.isRegularFile(path)) {
-            try (InputStream input = Files.newInputStream(path)) {
-                properties.load(input);
+            try {
+                for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
+                    String trimmed = line.trim();
+                    if (trimmed.isEmpty() || trimmed.startsWith("#") || trimmed.startsWith("[")) continue;
+                    int separator = trimmed.indexOf('=');
+                    if (separator <= 0) continue;
+                    String key = trimmed.substring(0, separator).trim();
+                    String value = trimmed.substring(separator + 1).trim();
+                    int comment = value.indexOf('#');
+                    if (comment >= 0) value = value.substring(0, comment).trim();
+                    if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+                        value = value.substring(1, value.length() - 1);
+                    }
+                    properties.setProperty(key, value);
+                }
             } catch (Exception ignored) {
             }
         }

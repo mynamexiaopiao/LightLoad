@@ -14,9 +14,9 @@ public final class LazyDataFixerManager {
     }
 
     public static boolean enabled() {
-        var config = StartupCoordinator.config();
-        return StartupCoordinator.aggressiveOptimizationsEnabled() && config.lazyDataFixer()
-                && !CompatibilityManager.modernFixPresent();
+        // DataFixers.DATA_FIXER is eagerly initialized before the 1.21.1 API exposes it.
+        // The 1.20.1 createFixerUpper(Set) interception is therefore not safe to port.
+        return false;
     }
 
     public static synchronized DataFixer create(Supplier<DataFixer> factory) {

@@ -9,6 +9,7 @@ import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.IoSupplier;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -26,8 +27,8 @@ import java.util.zip.ZipFile;
 
 @Mixin(FilePackResources.class)
 public abstract class FilePackResourcesMixin {
-    @Shadow @Nullable protected abstract ZipFile getOrCreateZipFile();
-    @Shadow @Nullable private ZipFile zipFile;
+    @Shadow @Final private FilePackResources.SharedZipFileAccess zipFileAccess;
+    @Shadow @Final private String prefix;
 
     @Unique
     private volatile Map<PackType, List<String>> lightload$entriesByType;
@@ -58,10 +59,11 @@ public abstract class FilePackResourcesMixin {
 
     @Unique
     private ZipFile lightload$openZip() {
-        ZipFile zip = getOrCreateZipFile();
+        FilePackResourcesSharedZipAccessor access = (FilePackResourcesSharedZipAccessor) zipFileAccess;
+        ZipFile zip = access.lightload$invokeGetOrCreateZipFile();
         if (zip == null || lightload$isOpen(zip)) return zip;
-        zipFile = null;
-        zip = getOrCreateZipFile();
+        access.lightload$setZipFile(null);
+        zip = access.lightload$invokeGetOrCreateZipFile();
         return zip != null && lightload$isOpen(zip) ? zip : null;
     }
 
@@ -70,7 +72,8 @@ public abstract class FilePackResourcesMixin {
         return () -> {
             ZipFile zip = lightload$openZip();
             if (zip == null) throw new FileNotFoundException(location.toString());
-            ZipEntry entry = zip.getEntry(type.getDirectory() + "/" + location.getNamespace() + "/" + location.getPath());
+            String path = type.getDirectory() + "/" + location.getNamespace() + "/" + location.getPath();
+            ZipEntry entry = zip.getEntry(prefix.isEmpty() ? path : prefix + "/" + path);
             if (entry == null) throw new FileNotFoundException(location.toString());
             return zip.getInputStream(entry);
         };

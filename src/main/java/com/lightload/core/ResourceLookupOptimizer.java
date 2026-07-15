@@ -7,7 +7,7 @@ import net.minecraft.server.packs.FilePackResources;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.IoSupplier;
-import net.minecraftforge.resource.PathPackResources;
+import net.minecraft.server.packs.PathPackResources;
 
 import java.io.InputStream;
 import java.util.ArrayList;

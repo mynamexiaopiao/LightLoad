@@ -30,7 +30,7 @@ public final class LightloadAgent {
         try {
             Path gameDirectory = resolveGameDirectory(arguments);
             System.setProperty("lightload.agent.gameDir", gameDirectory.toString());
-            Properties config = loadConfig(gameDirectory.resolve("config").resolve("lightload.properties"));
+            Properties config = loadConfig(gameDirectory.resolve("config").resolve("lightload-client.toml"));
             if (!Boolean.parseBoolean(config.getProperty("enabled", "true"))) return;
             if (!Boolean.parseBoolean(config.getProperty("earlyAgent", "true"))) return;
             configureRuntimeFlags(config);
@@ -45,18 +45,19 @@ public final class LightloadAgent {
             Files.createDirectories(cacheDirectory);
             Files.writeString(lock, Long.toString(System.currentTimeMillis()));
             int threads = parseThreads(config.getProperty("jarJarThreads", "4"));
-            boolean parallel = Boolean.parseBoolean(config.getProperty("parallelJarJarMetadata", "true"));
+            boolean parallel = Boolean.parseBoolean(config.getProperty("parallelJarJarMetadata", "false"));
             installBootstrapHooks(instrumentation, arguments, cacheDirectory);
             invokeBootstrap("configure", new Class[]{Path.class, int.class, boolean.class},
                     cacheDirectory.resolve("jij-index-v1.bin"), threads, parallel);
-             instrumentation.addTransformer(new JarInJarTransformer(instrumentation), false);
+            // NeoForge's locator writes into IDiscoveryPipeline and no longer returns a list.
+            // Keep the old transformer out of the pipeline until an equivalent cache can preserve that contract.
             installRuntimePatches(instrumentation);
             System.setProperty("lightload.agent.active", "true");
             System.setProperty("lightload.agent.cache", "waiting");
-            System.out.println("[Lightload Agent] Early Forge optimization active");
+            System.out.println("[Lightload Agent] Early NeoForge runtime optimization active");
         } catch (Throwable throwable) {
             System.setProperty("lightload.agent.cache", "failed");
-            System.err.println("[Lightload Agent] Initialization failed; Forge will continue normally: " + throwable);
+            System.err.println("[Lightload Agent] Initialization failed; NeoForge will continue normally: " + throwable);
         }
     }
 
@@ -67,7 +68,7 @@ public final class LightloadAgent {
         String stage = "resolve-game-directory";
         try {
             Path gameDirectory = resolveGameDirectory(arguments);
-            Properties config = loadConfig(gameDirectory.resolve("config").resolve("lightload.properties"));
+            Properties config = loadConfig(gameDirectory.resolve("config").resolve("lightload-client.toml"));
             configureRuntimeFlags(config);
             stage = "create-cache-directory";
             Path cacheDirectory = gameDirectory.resolve("cache").resolve("lightload").resolve("early");
@@ -79,12 +80,12 @@ public final class LightloadAgent {
             System.setProperty("lightload.runtimeAgent.active", "true");
             System.clearProperty("lightload.runtimeAgent.detail");
             System.clearProperty("lightload.runtimeAgent.stage");
-            System.out.println("[Lightload Agent] Runtime Forge transformer optimization active");
+            System.out.println("[Lightload Agent] Runtime NeoForge transformer optimization active");
         } catch (Throwable throwable) {
             System.setProperty("lightload.runtimeAgent.status", "failed");
             System.setProperty("lightload.runtimeAgent.stage", stage);
             System.setProperty("lightload.runtimeAgent.detail", describe(throwable));
-            System.err.println("[Lightload Agent] Runtime initialization failed; Forge will continue normally: "
+            System.err.println("[Lightload Agent] Runtime initialization failed; NeoForge will continue normally: "
                     + describe(throwable));
         }
     }
@@ -115,8 +116,21 @@ public final class LightloadAgent {
     private static Properties loadConfig(Path path) {
         Properties properties = new Properties();
         if (!Files.isRegularFile(path)) return properties;
-        try (InputStream input = Files.newInputStream(path)) {
-            properties.load(input);
+        try {
+            for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#") || trimmed.startsWith("[")) continue;
+                int separator = trimmed.indexOf('=');
+                if (separator <= 0) continue;
+                String key = trimmed.substring(0, separator).trim();
+                String value = trimmed.substring(separator + 1).trim();
+                int comment = value.indexOf('#');
+                if (comment >= 0) value = value.substring(0, comment).trim();
+                if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+                    value = value.substring(1, value.length() - 1);
+                }
+                properties.setProperty(key, value);
+            }
         } catch (Exception ignored) {
         }
         return properties;
@@ -166,7 +180,6 @@ public final class LightloadAgent {
                     && !name.equals(RuntimePatchTransformer.MIXIN_BYTECODE)
                     && !name.equals(RuntimePatchTransformer.MIXIN_PROCESSOR)
                     && !name.equals(RuntimePatchTransformer.RESOURCE_LOCATION)
-                    && !name.equals(RuntimePatchTransformer.MOD_JAR_METADATA)
                     && !name.equals(RuntimePatchTransformer.JDK_MODULE_RESOLVER))
                     || !instrumentation.isModifiableClass(loaded)) continue;
             instrumentation.retransformClasses(loaded);

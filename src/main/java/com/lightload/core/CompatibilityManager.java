@@ -1,8 +1,8 @@
 package com.lightload.core;
 
 import com.lightload.config.LightloadConfig;
-import net.minecraftforge.fml.ModList;
-import net.minecraftforge.fml.loading.FMLLoader;
+import net.neoforged.fml.ModList;
+import net.neoforged.fml.loading.FMLLoader;
 
 public final class CompatibilityManager {
     private static volatile Boolean modernFixPresent;

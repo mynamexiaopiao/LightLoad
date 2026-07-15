@@ -3,7 +3,7 @@ package com.lightload.core;
 import com.lightload.LightloadMod;
 import com.lightload.cache.ResourceIndexCache;
 import com.lightload.config.LightloadConfig;
-import net.minecraftforge.fml.loading.FMLPaths;
+import net.neoforged.fml.loading.FMLPaths;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -36,12 +36,15 @@ public final class StartupCoordinator {
 
     public static void initialize() {
         if (INITIALIZED.get()) return;
+        // Registry baking can reach mixins before NeoForge has loaded CLIENT configs.
+        // Do not freeze a default snapshot; the ModConfigEvent will initialize us later.
+        if (!LightloadConfig.loaded()) return;
         if (!INITIALIZED.compareAndSet(false, true)) return;
         Path gameDirectory = FMLPaths.GAMEDIR.get();
         Path cacheDirectory = gameDirectory.resolve("cache").resolve("lightload");
         startupLock = cacheDirectory.resolve("startup.lock");
         warmupLock = cacheDirectory.resolve("warmup.lock");
-        config = LightloadConfig.load(FMLPaths.CONFIGDIR.get());
+        config = LightloadConfig.current();
         boolean systemDisabled = Boolean.getBoolean("lightload.disable");
         recoveryMode = Files.isRegularFile(startupLock);
         aggressiveRecoveryMode = !recoveryMode && Files.isRegularFile(warmupLock);
@@ -136,7 +139,6 @@ public final class StartupCoordinator {
     }
 
     public static void minecraftConstructionStarted() {
-        initialize();
         MINECRAFT_STARTED.compareAndSet(0, System.nanoTime());
     }
 
@@ -315,7 +317,7 @@ public final class StartupCoordinator {
                 ResourceLookupOptimizer.enabled(), ResourceLookupOptimizer.parallelLookups(),
                 CompatibilityManager.lightspeedModernFixInteropEnabled(config),
                 config.dedicatedReloadExecutor() && !CompatibilityManager.modernFixPresent(),
-                config.lazyDataFixer() && !CompatibilityManager.modernFixPresent(),
+                LazyDataFixerManager.enabled(),
                 config.fastTextureStitching() && !CompatibilityManager.modernFixPresent()
         );
     }

@@ -1,9 +1,9 @@
 package com.lightload.mixin.client;
 
-import com.google.common.collect.ImmutableMap;
 import com.lightload.core.BlockStateCacheAccess;
 import com.lightload.core.LazyBlockStateCache;
 import com.mojang.serialization.MapCodec;
+import it.unimi.dsi.fastutil.objects.Reference2ObjectArrayMap;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
@@ -38,7 +38,7 @@ public abstract class BlockStateBaseCacheMixin extends StateHolder<Block, BlockS
     @Deprecated
     private boolean legacySolid;
 
-    protected BlockStateBaseCacheMixin(Block owner, ImmutableMap<Property<?>, Comparable<?>> values,
+    protected BlockStateBaseCacheMixin(Block owner, Reference2ObjectArrayMap<Property<?>, Comparable<?>> values,
                                        MapCodec<BlockState> codec) {
         super(owner, values, codec);
     }
@@ -94,7 +94,8 @@ public abstract class BlockStateBaseCacheMixin extends StateHolder<Block, BlockS
                 if (!lightload$buildingCache) {
                     lightload$buildingCache = true;
                     try {
-                        fluidState = owner.getFluidState(asState());
+                        fluidState = ((BlockBehaviourAccess) (Object) owner)
+                                .lightload$invokeGetFluidState(asState());
                     } finally {
                         lightload$buildingCache = false;
                     }
@@ -111,7 +112,9 @@ public abstract class BlockStateBaseCacheMixin extends StateHolder<Block, BlockS
                     ordinal = 0)
     )
     private boolean lightload$randomTickingOnDemand(BlockBehaviour.BlockStateBase ignored) {
-        return lightload$cacheInvalid ? owner.isRandomlyTicking(asState()) : isRandomlyTicking;
+        return lightload$cacheInvalid
+                ? ((BlockBehaviourAccess) (Object) owner).lightload$invokeIsRandomlyTicking(asState())
+                : isRandomlyTicking;
     }
 
     @Redirect(

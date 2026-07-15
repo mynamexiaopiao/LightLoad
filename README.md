@@ -1,13 +1,13 @@
 # Lightload
 
-Lightload is a client startup optimizer for Minecraft 1.20.1 and Forge 47. It combines early Forge
+Lightload is a client startup optimizer for Minecraft 1.21.1 and NeoForge 21.1. It combines early NeoForge
 metadata acceleration with fingerprinted resource caches, ordered parallel pack lookup, model
 micro-caches, lazy startup work, and compatibility profiles. It does not parallelize mod lifecycle
 events, OpenGL work, or arbitrary third-party resource packs.
 
 ## Build
 
-Use a Java 17 or newer Gradle launcher. The project toolchain compiles the mod for Java 17.
+Use a Java 21 Gradle launcher. The project toolchain compiles the mod for Java 21.
 
 ```powershell
 .\gradlew.bat test build
@@ -56,8 +56,8 @@ Production mod jars are cached. Development directories, folder resource packs, 
 cannot be fingerprinted safely, parsed JSON, baked models, textures, and open streams are never
 persisted.
 
-During the Mojang/Forge loading overlay, Lightload displays the live elapsed time. The completed
-startup time remains visible above Forge's branding in the title screen's bottom-left corner. Set
+During the Mojang/NeoForge loading overlay, Lightload displays the live elapsed time. The completed
+startup time remains visible above NeoForge's branding in the title screen's bottom-left corner. Set
 `showLoadingTime=false` to hide both displays without disabling profiling or caching.
 
 The path index records namespaces and relative resource paths after a non-blocking first scan and

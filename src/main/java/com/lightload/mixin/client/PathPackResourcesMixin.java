@@ -9,10 +9,11 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.IoSupplier;
-import net.minecraftforge.forgespi.locating.IModFile;
-import net.minecraftforge.resource.PathPackResources;
+import net.neoforged.neoforgespi.locating.IModFile;
+import net.minecraft.server.packs.PathPackResources;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -33,9 +34,9 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
-@Mixin(value = PathPackResources.class, remap = false)
+@Mixin(PathPackResources.class)
 public abstract class PathPackResourcesMixin implements ModFileBackedResourcePack {
-    @Shadow protected abstract Path resolve(String... paths);
+    @Shadow @Final private Path root;
 
     @Unique
     private volatile Map<String, Path> lightload$resolvedPaths;
@@ -71,38 +72,14 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         return lightload$routeSafe ? lightload$cacheIdentity : null;
     }
 
-    @Inject(method = "resolve", at = @At("HEAD"), cancellable = true, require = 0)
-    private void lightload$findResolvedPath(String[] paths, CallbackInfoReturnable<Path> cir) {
-        if (!StartupCoordinator.optimizationsActive()) return;
-        String key = Arrays.toString(paths);
-        Map<String, Path> resolvedPaths = lightload$resolvedPaths();
-        Path cached = resolvedPaths.get(key);
-        if (lightload$isUsable(cached)) {
-            cir.setReturnValue(cached);
-            return;
-        }
-        if (lightload$modFile == null) return;
-        Path resolved = lightload$modFile.findResource(paths);
-        if (lightload$isUsable(resolved)) resolvedPaths.put(key, resolved);
-        cir.setReturnValue(resolved);
-    }
-
-    @Inject(method = "resolve", at = @At("RETURN"), require = 0)
-    private void lightload$recordResolvedPath(String[] paths, CallbackInfoReturnable<Path> cir) {
-        if (!StartupCoordinator.optimizationsActive() || lightload$modFile != null) return;
-        Path resolved = cir.getReturnValue();
-        if (lightload$isUsable(resolved)) lightload$resolvedPaths().put(Arrays.toString(paths), resolved);
-    }
-
-    @Inject(method = {"getNamespaces", "m_5698_"}, at = @At("HEAD"), cancellable = true,
-            require = 0, remap = false)
+    @Inject(method = "getNamespaces", at = @At("HEAD"), cancellable = true, require = 0)
     private void lightload$findNamespaces(PackType type, CallbackInfoReturnable<Set<String>> cir) {
         ResourceIndexCache cache = StartupCoordinator.cache();
         if (cache == null || !cache.pathIndexEnabled() || FusionPackCompat.hasOverrides(this)) return;
         cache.findNamespaces(lightload$self(), type).ifPresent(cir::setReturnValue);
     }
 
-    @Inject(method = {"getNamespaces", "m_5698_"}, at = @At("RETURN"), require = 0, remap = false)
+    @Inject(method = "getNamespaces", at = @At("RETURN"), require = 0)
     private void lightload$recordNamespaces(PackType type, CallbackInfoReturnable<Set<String>> cir) {
         ResourceIndexCache cache = StartupCoordinator.cache();
         Set<String> namespaces = cir.getReturnValue();
@@ -113,8 +90,7 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         }
     }
 
-    @Inject(method = {"listResources", "m_8031_"}, at = @At("HEAD"), cancellable = true,
-            require = 0, remap = false)
+    @Inject(method = "listResources", at = @At("HEAD"), cancellable = true, require = 0)
     private void lightload$listIndexedResources(PackType type, String namespace, String path,
                                                 PackResources.ResourceOutput output, CallbackInfo ci) {
         ResourceIndexCache cache = StartupCoordinator.cache();
@@ -139,8 +115,8 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         String key = type.name() + '|' + namespace;
         if (!lightload$scheduledPathScans().add(key)) return;
         cache.scanAsync(() -> {
-            Path root = resolve(type.getDirectory(), namespace);
-            List<String> paths = lightload$scanPaths(root);
+            Path namespaceRoot = lightload$resolve(type.getDirectory(), namespace);
+            List<String> paths = lightload$scanPaths(namespaceRoot);
             if (paths != null) cache.recordResourcePaths(lightload$self(), type, namespace, paths);
         });
     }
@@ -160,8 +136,7 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         }
     }
 
-    @Inject(method = {"getResource", "m_214146_"}, at = @At("HEAD"), cancellable = true,
-            require = 1, remap = false)
+    @Inject(method = "getResource", at = @At("HEAD"), cancellable = true, require = 1)
     private void lightload$findResource(PackType type, ResourceLocation location,
                                         CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
         ResourceIndexCache cache = StartupCoordinator.cache();
@@ -183,8 +158,7 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         if (exists.isPresent()) cir.setReturnValue(lightload$openResource(type, location));
     }
 
-    @Inject(method = {"getResource", "m_214146_"}, at = @At("RETURN"), cancellable = true,
-            require = 1, remap = false)
+    @Inject(method = "getResource", at = @At("RETURN"), cancellable = true, require = 1)
     private void lightload$recordResource(PackType type, ResourceLocation location,
                                           CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
         ResourceIndexCache cache = StartupCoordinator.cache();
@@ -199,8 +173,7 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         }
     }
 
-    @Inject(method = {"getRootResource", "m_8017_"}, at = @At("HEAD"), cancellable = true,
-            require = 1, remap = false)
+    @Inject(method = "getRootResource", at = @At("HEAD"), cancellable = true, require = 1)
     private void lightload$findRootResource(String[] paths,
                                             CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
         ResourceIndexCache cache = StartupCoordinator.cache();
@@ -211,7 +184,7 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         cir.setReturnValue(exists.get() ? lightload$openRootResource(Arrays.copyOf(paths, paths.length)) : null);
     }
 
-    @Inject(method = {"getRootResource", "m_8017_"}, at = @At("RETURN"), require = 1, remap = false)
+    @Inject(method = "getRootResource", at = @At("RETURN"), require = 1)
     private void lightload$recordRootResource(String[] paths,
                                               CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
         ResourceIndexCache cache = StartupCoordinator.cache();
@@ -227,13 +200,13 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         resolved[0] = type.getDirectory();
         resolved[1] = location.getNamespace();
         System.arraycopy(parts, 0, resolved, 2, parts.length);
-        return () -> Files.newInputStream(resolve(resolved));
+        return () -> Files.newInputStream(lightload$resolve(resolved));
     }
 
     @Unique
     private IoSupplier<InputStream> lightload$openRootResource(String[] paths) {
         return () -> {
-            Path resolved = resolve(paths);
+            Path resolved = lightload$resolve(paths);
             if (resolved == null) throw new NoSuchFileException(Arrays.toString(paths));
             return Files.newInputStream(resolved);
         };
@@ -242,6 +215,24 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
     @Unique
     private PathPackResources lightload$self() {
         return (PathPackResources) (Object) this;
+    }
+
+    @Unique
+    private Path lightload$resolve(String... paths) {
+        String key = Arrays.toString(paths);
+        Map<String, Path> resolvedPaths = lightload$resolvedPaths();
+        Path cached = resolvedPaths.get(key);
+        if (lightload$isUsable(cached)) return cached;
+
+        Path resolved;
+        if (lightload$modFile != null) {
+            resolved = lightload$modFile.findResource(paths);
+        } else {
+            resolved = root;
+            for (String path : paths) resolved = resolved.resolve(path);
+        }
+        if (lightload$isUsable(resolved)) resolvedPaths.put(key, resolved);
+        return resolved;
     }
 
     @Unique
