@@ -1,0 +1,30 @@
+package com.lightload.mixin.client;
+
+import net.minecraft.client.renderer.block.model.MultiVariant;
+import net.minecraft.resources.ResourceLocation;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+import java.util.Collection;
+import java.util.Set;
+
+@Mixin(MultiVariant.class)
+public abstract class MultiVariantDependenciesMixin {
+    @Unique private volatile Collection<ResourceLocation> lightload$dependencies;
+
+    @Inject(method = "getDependencies", at = @At("HEAD"), cancellable = true, require = 0)
+    private void lightload$findDependencies(CallbackInfoReturnable<Collection<ResourceLocation>> cir) {
+        Collection<ResourceLocation> dependencies = lightload$dependencies;
+        if (dependencies != null) cir.setReturnValue(dependencies);
+    }
+
+    @Inject(method = "getDependencies", at = @At("RETURN"), require = 0)
+    private void lightload$rememberDependencies(CallbackInfoReturnable<Collection<ResourceLocation>> cir) {
+        if (lightload$dependencies == null && cir.getReturnValue() != null) {
+            lightload$dependencies = Set.copyOf(cir.getReturnValue());
+        }
+    }
+}
