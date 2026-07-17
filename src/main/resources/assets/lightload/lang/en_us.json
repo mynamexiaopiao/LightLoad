@@ -36,6 +36,8 @@
   "lightload.configuration.resources.cacheResourceRoutes.tooltip": "Cache resource-to-pack routing layouts.",
   "lightload.configuration.resources.cacheResourceExistence": "Resource Existence Cache",
   "lightload.configuration.resources.cacheResourceExistence.tooltip": "Cache whether resources exist in individual packs.",
+  "lightload.configuration.resources.maxExistenceCacheMiB": "Maximum Existence Cache (MiB)",
+  "lightload.configuration.resources.maxExistenceCacheMiB.tooltip": "Disable the disk existence index when it exceeds this size.",
   "lightload.configuration.resources.cacheResourceContent": "Resource Content Cache",
   "lightload.configuration.resources.cacheResourceContent.tooltip": "Cache the contents of small resources in memory and on disk.",
   "lightload.configuration.resources.maxContentCacheMiB": "Maximum Content Cache (MiB)",

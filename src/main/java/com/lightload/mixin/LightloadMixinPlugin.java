@@ -1,6 +1,5 @@
 package com.lightload.mixin;
 
-import com.lightload.bootstrap.RuntimeAgentBootstrap;
 import com.lightload.core.CompatibilityManager;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
@@ -69,7 +68,14 @@ public final class LightloadMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public void onLoad(String mixinPackage) {
-        RuntimeAgentBootstrap.install();
+        if (Boolean.getBoolean("lightload.runtimeAgent.active")
+                || Boolean.getBoolean("lightload.agent.active")) return;
+        try {
+            Class.forName("com.lightload.bootstrap.RuntimeAgentBootstrap", true,
+                    LightloadMixinPlugin.class.getClassLoader())
+                    .getMethod("install").invoke(null);
+        } catch (ReflectiveOperationException ignored) {
+        }
     }
 
     @Override

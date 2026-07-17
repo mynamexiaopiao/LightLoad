@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Supplier;
 
-/** Ordered parallel lookup for immutable vanilla and Forge mod resource packs. */
+/** Ordered parallel lookup for immutable vanilla and NeoForge mod resource packs. */
 public final class ResourceLookupOptimizer {
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
     private static final LongAdder PARALLEL_LOOKUPS = new LongAdder();
@@ -98,7 +98,7 @@ public final class ResourceLookupOptimizer {
         Class<?> type = pack.getClass();
         boolean forgePathPack = pack instanceof PathPackResources
                 && (type == PathPackResources.class
-                || type.getName().startsWith("net.minecraftforge.resource.ResourcePackLoader$"));
+                || type.getName().startsWith("net.neoforged.neoforge.resource.ResourcePackLoader$"));
         return (forgePathPack || type == FilePackResources.class) && !FusionPackCompat.hasOverrides(pack);
     }
 

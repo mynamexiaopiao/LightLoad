@@ -29,6 +29,7 @@ final class RuntimePatchTransformer implements ClassFileTransformer {
     static final String RESOURCE_LOCATION = "net/minecraft/resources/ResourceLocation";
     static final String MOD_JAR_METADATA =
             "net/neoforged/fml/loading/moddiscovery/ModJarMetadata";
+    static final String MODULE_CLASS_LOADER = "cpw/mods/cl/ModuleClassLoader";
     static final String JDK_MODULE_RESOLVER = "java/lang/module/Resolver";
     private static final String HOOKS = "com/lightload/agent/RuntimeTransformationHooks";
     private static final String TYPE_DESCRIPTOR = "Lorg/objectweb/asm/Type;";
@@ -56,6 +57,12 @@ final class RuntimePatchTransformer implements ClassFileTransformer {
                 && Boolean.parseBoolean(System.getProperty("lightload.runtimePatch.oculusPath.enabled", "true"))) {
             return transformOculusResourceLocation(module, classfileBuffer);
         }
+        if (MOD_JAR_METADATA.equals(className)) {
+            return transformModJarMetadata(module, classfileBuffer);
+        }
+        if (MODULE_CLASS_LOADER.equals(className)) {
+            return transformModuleClassLoader(module, classfileBuffer);
+        }
         // NeoForge 1.21.1 uses computeDescriptor() and JarContents#getPackagesExcluding().
         // The Forge descriptor() package-cache rewrite is intentionally not applied.
         if (JDK_MODULE_RESOLVER.equals(className)) {
@@ -66,7 +73,7 @@ final class RuntimePatchTransformer implements ClassFileTransformer {
 
     private byte[] transformModJarMetadata(Module module, byte[] classfileBuffer) {
         try {
-            openTargetModule(module, "net.minecraftforge.fml.loading.moddiscovery");
+            openTargetModule(module, "net.neoforged.fml.loading.moddiscovery");
             ClassNode node = new ClassNode(Opcodes.ASM9);
             new ClassReader(classfileBuffer).accept(node, 0);
             MethodNode descriptor = find(node, "descriptor", "()Ljava/lang/module/ModuleDescriptor;");
@@ -94,6 +101,37 @@ final class RuntimePatchTransformer implements ClassFileTransformer {
         } catch (Throwable throwable) {
             System.setProperty("lightload.runtimePatch.modulePackageIndex", "failed");
             System.err.println("[Lightload Agent] Module package cache patch failed: " + throwable);
+            return null;
+        }
+    }
+
+    private byte[] transformModuleClassLoader(Module module, byte[] classfileBuffer) {
+        try {
+            openTargetModule(module, null);
+            ClassNode node = new ClassNode(Opcodes.ASM9);
+            new ClassReader(classfileBuffer).accept(node, 0);
+            MethodNode method = find(node, "getClassBytes",
+                    "(Ljava/lang/module/ModuleReader;Ljava/lang/module/ModuleReference;Ljava/lang/String;)[B");
+            if (method == null) {
+                System.setProperty("lightload.runtimePatch.classBytes", "unsupported-method");
+                return null;
+            }
+            method.instructions.clear();
+            method.tryCatchBlocks.clear();
+            method.localVariables = null;
+            method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 1));
+            method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 2));
+            method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 3));
+            method.instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HOOKS, "readClassBytes",
+                    "(Ljava/lang/module/ModuleReader;Ljava/lang/module/ModuleReference;Ljava/lang/String;)[B", false));
+            method.instructions.add(new InsnNode(Opcodes.ARETURN));
+            ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            node.accept(writer);
+            System.setProperty("lightload.runtimePatch.classBytes", "persistent-raw");
+            return writer.toByteArray();
+        } catch (Throwable throwable) {
+            System.setProperty("lightload.runtimePatch.classBytes", "failed");
+            System.err.println("[Lightload Agent] Module class byte reader patch failed: " + throwable);
             return null;
         }
     }

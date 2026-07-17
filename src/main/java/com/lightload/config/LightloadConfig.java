@@ -27,6 +27,7 @@ public record LightloadConfig(
         boolean lightspeedModernFixInterop,
         boolean cacheResourceRoutes,
         boolean cacheResourceExistence,
+        long maxExistenceCacheBytes,
         boolean cacheResourceContent,
         long maxContentCacheBytes,
         int maxCachedResourceBytes,
@@ -35,7 +36,8 @@ public record LightloadConfig(
         boolean isolateModdedResourceReloadFailures,
         String isolatedResourceReloadListenerPatterns,
         boolean connectorCompatibilityMode,
-        String optimizationProfile
+        String optimizationProfile,
+        boolean earlyAgent
 ) {
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
     public static final Values VALUES = new Values(BUILDER);
@@ -52,11 +54,12 @@ public record LightloadConfig(
                 VALUES.deferYaclImagePreload.get(), VALUES.forgeRegistryLookupCache.get(),
                 VALUES.mixinTargetIndex.get(), VALUES.lightspeedModernFixInterop.get(),
                 VALUES.cacheResourceRoutes.get(), VALUES.cacheResourceExistence.get(),
+                VALUES.maxExistenceCacheMiB.get() * 1024L * 1024L,
                 VALUES.cacheResourceContent.get(), VALUES.maxContentCacheMiB.get() * 1024L * 1024L,
                 VALUES.maxCachedResourceKiB.get() * 1024, VALUES.parallelResourceLookup.get(),
                 VALUES.parallelLookupMinPacks.get(), VALUES.isolateModdedResourceReloadFailures.get(),
                 VALUES.isolatedResourceReloadListenerPatterns.get(), VALUES.connectorCompatibilityMode.get(),
-                profile(VALUES.optimizationProfile.get().name()));
+                profile(VALUES.optimizationProfile.get().name()), VALUES.earlyAgent.get());
     }
 
     public static boolean loaded() {
@@ -67,29 +70,29 @@ public record LightloadConfig(
         return new LightloadConfig(
                 true, true, true, true, true, true, true, 0,
                 true, true, true, true, true, true, true, true, true,
-                false, true, false, 256L * 1024 * 1024, 1024 * 1024,
-                true, 4, true, "*", true, "auto");
+                false, true, 256L * 1024 * 1024, false, 256L * 1024 * 1024, 1024 * 1024,
+                true, 16, true, "*", true, "auto", true);
     }
 
     public LightloadConfig(boolean enabled, boolean memoryCache, boolean persistentCache,
                            boolean profiling, long ignoredCacheLimit) {
         this(enabled, memoryCache, persistentCache, profiling, true, true, true, 0,
-                true, true, true, true, true, true, true, true, true, true, true, true,
-                256L * 1024 * 1024, 1024 * 1024, true, 4, true, "*", true, "auto");
+                true, true, true, true, true, true, true, true, true, true, true,
+                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024, true, 16, true, "*", true, "auto", true);
     }
 
     public LightloadConfig(boolean enabled, boolean memoryCache, boolean persistentCache,
                            boolean profiling, long ignoredCacheLimit, boolean cacheResourceExistence) {
         this(enabled, memoryCache, persistentCache, profiling, true, true, true, 0,
-                true, true, true, true, true, true, true, true, true, false, cacheResourceExistence, true,
-                256L * 1024 * 1024, 1024 * 1024, true, 4, true, "*", true, "auto");
+                true, true, true, true, true, true, true, false, true, false, cacheResourceExistence,
+                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024, true, 16, true, "*", true, "auto", true);
     }
 
     public LightloadConfig(boolean enabled, boolean memoryCache, boolean persistentCache,
                            boolean profiling, boolean showLoadingTime, long ignoredCacheLimit) {
         this(enabled, memoryCache, persistentCache, profiling, showLoadingTime, true, true, 0,
-                true, true, true, true, true, true, true, true, true, true, true, true,
-                256L * 1024 * 1024, 1024 * 1024, true, 4, true, "*", true, "auto");
+                true, true, true, true, true, true, true, true, true, true, true,
+                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024, true, 16, true, "*", true, "auto", true);
     }
 
     private static String profile(String value) {
@@ -117,6 +120,7 @@ public record LightloadConfig(
         public final ModConfigSpec.BooleanValue lightspeedModernFixInterop;
         public final ModConfigSpec.BooleanValue cacheResourceRoutes;
         public final ModConfigSpec.BooleanValue cacheResourceExistence;
+        public final ModConfigSpec.IntValue maxExistenceCacheMiB;
         public final ModConfigSpec.BooleanValue cacheResourceContent;
         public final ModConfigSpec.IntValue maxContentCacheMiB;
         public final ModConfigSpec.IntValue maxCachedResourceKiB;
@@ -152,11 +156,12 @@ public record LightloadConfig(
             persistentCache = builder.translation("lightload.configuration.resources.persistentCache").define("persistentCache", true);
             cacheResourceRoutes = builder.translation("lightload.configuration.resources.cacheResourceRoutes").define("cacheResourceRoutes", false);
             cacheResourceExistence = builder.translation("lightload.configuration.resources.cacheResourceExistence").define("cacheResourceExistence", true);
+            maxExistenceCacheMiB = builder.translation("lightload.configuration.resources.maxExistenceCacheMiB").defineInRange("maxExistenceCacheMiB", 256, 16, 2048);
             cacheResourceContent = builder.translation("lightload.configuration.resources.cacheResourceContent").define("cacheResourceContent", false);
             maxContentCacheMiB = builder.translation("lightload.configuration.resources.maxContentCacheMiB").defineInRange("maxContentCacheMiB", 256, 16, 1024);
             maxCachedResourceKiB = builder.translation("lightload.configuration.resources.maxCachedResourceKiB").defineInRange("maxCachedResourceKiB", 1024, 16, 8192);
             parallelResourceLookup = builder.translation("lightload.configuration.resources.parallelResourceLookup").define("parallelResourceLookup", true);
-            parallelLookupMinPacks = builder.translation("lightload.configuration.resources.parallelLookupMinPacks").defineInRange("parallelLookupMinPacks", 4, 2, 64);
+            parallelLookupMinPacks = builder.translation("lightload.configuration.resources.parallelLookupMinPacks").defineInRange("parallelLookupMinPacks", 16, 2, 64);
             dedicatedReloadExecutor = builder.translation("lightload.configuration.resources.dedicatedReloadExecutor").define("dedicatedReloadExecutor", true);
             reloadThreads = builder.translation("lightload.configuration.resources.reloadThreads").defineInRange("reloadThreads", 0, 0, 64);
             isolateModdedResourceReloadFailures = builder.translation("lightload.configuration.resources.isolateModdedResourceReloadFailures").define("isolateModdedResourceReloadFailures", true);

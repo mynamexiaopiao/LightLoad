@@ -22,6 +22,14 @@ public final class RuntimeAgentBootstrap {
     }
 
     public static void install() {
+        install("runtime");
+    }
+
+    public static void installEarly() {
+        install("early");
+    }
+
+    private static void install(String mode) {
         if (!STARTED.compareAndSet(false, true) || Boolean.getBoolean("lightload.disable")
                 || Boolean.getBoolean("lightload.runtimeAgent.disable")
                 || Boolean.getBoolean("lightload.agent.active")) return;
@@ -40,7 +48,7 @@ public final class RuntimeAgentBootstrap {
                     System.getProperty("os.name", "").startsWith("Windows") ? "java.exe" : "java");
             if (!Files.isRegularFile(java)) return;
 
-            String options = "mode=runtime;gameDir64=" + encodeOption(gameDirectory)
+            String options = "mode=" + mode + ";gameDir64=" + encodeOption(gameDirectory)
                     + ";agentJar64=" + encodeOption(agentJar);
             Process process = new ProcessBuilder(
                     java.toString(), "--add-modules", "jdk.attach", "-cp", agentJar.toString(),
@@ -153,7 +161,7 @@ public final class RuntimeAgentBootstrap {
         }
     }
 
-    private static Path resolveGameDirectory() {
+    static Path resolveGameDirectory() {
         Path workingDirectory = Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize();
         if (Files.isDirectory(workingDirectory.resolve("mods"))) return workingDirectory;
         String command = System.getProperty("sun.java.command", "");

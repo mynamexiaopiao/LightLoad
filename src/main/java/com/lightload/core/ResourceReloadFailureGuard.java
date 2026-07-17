@@ -49,7 +49,7 @@ public final class ResourceReloadFailureGuard {
     }
 
     private static boolean isCore(String className) {
-        return className.startsWith("net.minecraft.") || className.startsWith("net.minecraftforge.")
+        return className.startsWith("net.minecraft.") || className.startsWith("net.neoforged.")
                 || className.startsWith("com.mojang.") || className.startsWith("java.")
                 || className.startsWith("javax.");
     }

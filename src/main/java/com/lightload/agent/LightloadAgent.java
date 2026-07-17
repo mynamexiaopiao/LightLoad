@@ -47,6 +47,9 @@ public final class LightloadAgent {
             int threads = parseThreads(config.getProperty("jarJarThreads", "4"));
             boolean parallel = Boolean.parseBoolean(config.getProperty("parallelJarJarMetadata", "false"));
             installBootstrapHooks(instrumentation, arguments, cacheDirectory);
+            Class.forName("com.lightload.agent.RuntimeTransformationHooks", true, null)
+                    .getMethod("activateRuntimeClassByteCache", Path.class)
+                    .invoke(null, gameDirectory);
             invokeBootstrap("configure", new Class[]{Path.class, int.class, boolean.class},
                     cacheDirectory.resolve("jij-index-v1.bin"), threads, parallel);
             // NeoForge's locator writes into IDiscoveryPipeline and no longer returns a list.
@@ -69,18 +72,25 @@ public final class LightloadAgent {
         try {
             Path gameDirectory = resolveGameDirectory(arguments);
             Properties config = loadConfig(gameDirectory.resolve("config").resolve("lightload-client.toml"));
+            boolean early = "early".equalsIgnoreCase(option(arguments, "mode"));
             configureRuntimeFlags(config);
             stage = "create-cache-directory";
             Path cacheDirectory = gameDirectory.resolve("cache").resolve("lightload").resolve("early");
             Files.createDirectories(cacheDirectory);
             stage = "install-bootstrap-hooks";
             installBootstrapHooks(instrumentation, arguments, cacheDirectory);
+            stage = "activate-runtime-class-cache";
+            Class.forName("com.lightload.agent.RuntimeTransformationHooks", true, null)
+                    .getMethod("activateRuntimeClassByteCache", Path.class)
+                    .invoke(null, gameDirectory);
             stage = "install-runtime-patches";
             installRuntimePatches(instrumentation);
-            System.setProperty("lightload.runtimeAgent.active", "true");
+            if (early) System.setProperty("lightload.agent.active", "true");
+            else System.setProperty("lightload.runtimeAgent.active", "true");
             System.clearProperty("lightload.runtimeAgent.detail");
             System.clearProperty("lightload.runtimeAgent.stage");
-            System.out.println("[Lightload Agent] Runtime NeoForge transformer optimization active");
+            System.out.println("[Lightload Agent] " + (early ? "Early" : "Runtime")
+                    + " NeoForge transformer optimization active");
         } catch (Throwable throwable) {
             System.setProperty("lightload.runtimeAgent.status", "failed");
             System.setProperty("lightload.runtimeAgent.stage", stage);
@@ -169,6 +179,8 @@ public final class LightloadAgent {
         Class<?> runtimeHooks = Class.forName("com.lightload.agent.RuntimeTransformationHooks", true, null);
         runtimeHooks.getMethod("configureModulePackageCache", Path.class)
                 .invoke(null, cacheDirectory.resolve("module-packages-v1.bin"));
+        runtimeHooks.getMethod("configureClassByteCache", Path.class)
+                .invoke(null, cacheDirectory.resolve("class-bytes-v1"));
     }
 
     private static void installRuntimePatches(Instrumentation instrumentation) throws Exception {
@@ -180,6 +192,7 @@ public final class LightloadAgent {
                     && !name.equals(RuntimePatchTransformer.MIXIN_BYTECODE)
                     && !name.equals(RuntimePatchTransformer.MIXIN_PROCESSOR)
                     && !name.equals(RuntimePatchTransformer.RESOURCE_LOCATION)
+                    && !name.equals(RuntimePatchTransformer.MODULE_CLASS_LOADER)
                     && !name.equals(RuntimePatchTransformer.JDK_MODULE_RESOLVER))
                     || !instrumentation.isModifiableClass(loaded)) continue;
             instrumentation.retransformClasses(loaded);
@@ -206,6 +219,7 @@ public final class LightloadAgent {
         String[] prefixes = {
                 "com/lightload/agent/EarlyJarInJarHooks",
                  "com/lightload/agent/RuntimeTransformationHooks",
+                "com/lightload/agent/ClassByteArchive",
                 "com/lightload/agent/ModulePackageIndexStore",
                 "com/lightload/agent/ParentFingerprint",
                 "com/lightload/agent/JarJarIndex",

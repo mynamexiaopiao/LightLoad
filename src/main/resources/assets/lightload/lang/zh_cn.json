@@ -36,6 +36,8 @@
   "lightload.configuration.resources.cacheResourceRoutes.tooltip": "缓存资源到资源包的路由布局。",
   "lightload.configuration.resources.cacheResourceExistence": "资源存在性缓存",
   "lightload.configuration.resources.cacheResourceExistence.tooltip": "缓存单个资源包中是否存在指定资源。",
+  "lightload.configuration.resources.maxExistenceCacheMiB": "最大存在性缓存（MiB）",
+  "lightload.configuration.resources.maxExistenceCacheMiB.tooltip": "磁盘存在性索引超过此大小时停用。",
   "lightload.configuration.resources.cacheResourceContent": "资源内容缓存",
   "lightload.configuration.resources.cacheResourceContent.tooltip": "在内存和磁盘中缓存小型资源的内容。",
   "lightload.configuration.resources.maxContentCacheMiB": "内容缓存上限（MiB）",

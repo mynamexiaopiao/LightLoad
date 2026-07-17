@@ -79,8 +79,9 @@ public final class StartupCoordinator {
         }
         cache = new ResourceIndexCache(config, cacheDirectory);
         optimizationsActive = cache.isUsable();
-        if (CompatibilityManager.modernFixPresent()) {
-            LightloadMod.LOGGER.info("[Lightload] ModernFix owns DFU, reload executor, stitcher, and model layers; Lightload resource caches remain active");
+        if (config.earlyAgent() && !Boolean.getBoolean("lightload.agent.active")) {
+            LightloadMod.LOGGER.warn(
+                    "[Lightload] Embedded early bootstrap is inactive; early class caching is unavailable for this launch");
         }
         LightloadMod.LOGGER.info("[Lightload] Adaptive startup optimizations are enabled");
     }
@@ -167,6 +168,7 @@ public final class StartupCoordinator {
         }
         ResourceIndexCache currentCache = cache;
         if (currentCache != null) currentCache.persistAsync();
+        finishEarlyAgentClassCache();
         try {
             if (startupLock != null) Files.deleteIfExists(startupLock);
             Path agentGameDirectory = Path.of(System.getProperty("lightload.agent.gameDir", FMLPaths.GAMEDIR.get().toString()));
@@ -185,6 +187,14 @@ public final class StartupCoordinator {
             if (warmupLock != null) Files.deleteIfExists(warmupLock);
         } catch (IOException exception) {
             LightloadMod.LOGGER.debug("[Lightload] Could not clear warmup marker", exception);
+        }
+    }
+
+    private static void finishEarlyAgentClassCache() {
+        try {
+            Class.forName("com.lightload.agent.RuntimeTransformationHooks", true, null)
+                    .getMethod("finishClassByteCache").invoke(null);
+        } catch (ReflectiveOperationException ignored) {
         }
     }
 

@@ -273,37 +273,80 @@ def agentShadowJar = tasks.register('agentShadowJar', com.github.jengelman.gradl
 }
 
 tasks.named('shadowJar', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar).configure {
-    dependsOn agentShadowJar
-    archiveClassifier = ''
+    archiveClassifier = 'game-internal'
+    destinationDirectory = layout.buildDirectory.dir('tmp/gamePayload')
     configurations = []
     from(layout.buildDirectory.file("tmp/compileJava/${mod_id}.refmap.json"))
+    manifest.inheritFrom tasks.named('jar', Jar).get().manifest
+    exclude 'com/lightload/bootstrap/**'
+    exclude 'com/lightload/agent/**'
+    exclude 'META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator'
+}
+
+def bootstrapJar = tasks.register('bootstrapJar', Jar) {
+    dependsOn agentShadowJar
+    dependsOn tasks.named('shadowJar')
+    archiveBaseName = mod_id
+    archiveClassifier = ''
+    from(sourceSets.main.output) {
+        include 'com/lightload/bootstrap/**'
+        include 'META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator'
+    }
     from({ zipTree(agentShadowJar.get().archiveFile.get().asFile) }) {
         exclude 'META-INF/MANIFEST.MF'
+        exclude 'module-info.class'
+        exclude 'META-INF/versions/**/module-info.class'
     }
-    manifest.inheritFrom tasks.named('jar', Jar).get().manifest
+    from({ tasks.named('shadowJar').get().archiveFile.get().asFile }) {
+        into 'META-INF/lightload'
+        rename { 'lightload-game.jar' }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes([
+                'Implementation-Title'    : 'Lightload Bootstrap',
+                'Implementation-Version'  : project.version,
+                'Implementation-Vendor'   : mod_authors,
+                'Agent-Class'             : 'com.lightload.agent.LightloadAgent',
+                'Premain-Class'           : 'com.lightload.agent.LightloadAgent',
+                'Can-Redefine-Classes'    : 'false',
+                'Can-Retransform-Classes' : 'true',
+                'Automatic-Module-Name'   : 'lightload.bootstrap'
+        ])
+    }
 }
 
 tasks.register('verifyShadowIsolation') {
-    dependsOn tasks.named('shadowJar')
+    dependsOn bootstrapJar
     doLast {
-        def shadow = tasks.named('shadowJar').get().archiveFile.get().asFile
-        def jar = new java.util.jar.JarFile(shadow)
+        def bootstrap = bootstrapJar.get().archiveFile.get().asFile
+        def jar = new java.util.jar.JarFile(bootstrap)
         try {
-            def pluginEntry = jar.getJarEntry('com/lightload/mixin/LightloadMixinPlugin.class')
-            if (pluginEntry == null) throw new GradleException('LightloadMixinPlugin is missing from the final JAR')
-            def pluginBytes = jar.getInputStream(pluginEntry).readAllBytes()
-            def constants = new String(pluginBytes, java.nio.charset.StandardCharsets.ISO_8859_1)
-            if (!constants.contains('org/objectweb/asm/tree/ClassNode') ||
-                    constants.contains('com/lightload/shadow/asm/tree/ClassNode')) {
-                throw new GradleException('Mixin plugin ASM signature was relocated')
-            }
-
             def transformerEntry = jar.getJarEntry('com/lightload/agent/JarInJarTransformer.class')
             if (transformerEntry == null) throw new GradleException('Agent transformer is missing from the final JAR')
             def transformerBytes = jar.getInputStream(transformerEntry).readAllBytes()
             def transformerConstants = new String(transformerBytes, java.nio.charset.StandardCharsets.ISO_8859_1)
             if (!transformerConstants.contains('com/lightload/shadow/asm/ClassReader')) {
                 throw new GradleException('Agent transformer is not using isolated ASM')
+            }
+            def serviceEntry = jar.getJarEntry('META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator')
+            if (serviceEntry == null) throw new GradleException('NeoForge early locator service is missing')
+            def payloadEntry = jar.getJarEntry('META-INF/lightload/lightload-game.jar')
+            if (payloadEntry == null) throw new GradleException('Embedded GAME payload is missing from the bundle')
+            def payloadBytes = jar.getInputStream(payloadEntry).readAllBytes()
+            def payloadInput = new java.util.jar.JarInputStream(new java.io.ByteArrayInputStream(payloadBytes))
+            try {
+                def names = [] as Set
+                for (def entry = payloadInput.nextJarEntry; entry != null; entry = payloadInput.nextJarEntry) {
+                    names.add(entry.name)
+                }
+                if (!names.contains('META-INF/neoforge.mods.toml') ||
+                        !names.contains('com/lightload/LightloadMod.class') ||
+                        names.any { it.startsWith('com/lightload/agent/') || it.startsWith('com/lightload/bootstrap/') }) {
+                    throw new GradleException('Embedded GAME payload has invalid layer contents')
+                }
+            } finally {
+                payloadInput.close()
             }
         } finally {
             jar.close()
@@ -313,6 +356,7 @@ tasks.register('verifyShadowIsolation') {
 }
 
 tasks.named('build').configure {
+    dependsOn bootstrapJar
     dependsOn tasks.named('verifyShadowIsolation')
 }
 
