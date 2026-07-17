@@ -89,9 +89,18 @@ public final class ResourceIndexCache {
 
     public ResourceIndexCache(LightloadConfig config, Path cacheDirectory) {
         this.config = config;
+        this.store = new ResourceIndexShardStore(cacheDirectory, mcVersion(), forgeVersion(),
+                config.cacheResourceExistence());
         boolean optiFine = CompatibilityManager.optiFinePresent();
+        long existenceDiskBytes = store.existenceDiskBytes();
+        boolean existenceCacheWithinBudget = existenceDiskBytes <= config.maxExistenceCacheBytes();
         this.effectiveExistenceCache = isUsable() && config.cacheResourceExistence()
-                && !CompatibilityManager.lightspeedPresent() && !optiFine;
+                && existenceCacheWithinBudget && !CompatibilityManager.lightspeedPresent() && !optiFine;
+        if (isUsable() && config.cacheResourceExistence() && !existenceCacheWithinBudget) {
+            LightloadMod.LOGGER.info(
+                    "[Lightload] Skipping {} MiB resource existence cache; configured limit is {} MiB",
+                    existenceDiskBytes / 1024 / 1024, config.maxExistenceCacheBytes() / 1024 / 1024);
+        }
         this.effectiveContentCache = isUsable() && config.cacheResourceContent()
                 && !CompatibilityManager.lightspeedPresent() && !optiFine;
         this.effectiveRouteCache = isUsable() && config.cacheResourceRoutes()
@@ -99,16 +108,15 @@ public final class ResourceIndexCache {
         this.effectivePathIndex = isUsable()
                 && !CompatibilityManager.resourcePathCompatibilityRiskPresent()
                 && !CompatibilityManager.lightspeedPresent() && !optiFine;
-        this.store = new ResourceIndexShardStore(cacheDirectory, mcVersion(), forgeVersion());
         this.contentFile = cacheDirectory.resolve("resource-content-v3.bin");
         this.routeFile = cacheDirectory.resolve("resource-routes-v1.bin");
         this.persistedPaths = config.persistentCache() && effectivePathIndex
                 ? CompletableFuture.supplyAsync(store::loadAllPaths, loader)
                 : CompletableFuture.completedFuture(new ConcurrentHashMap<>());
-        this.persistedContents = config.persistentCache() && config.cacheResourceContent()
+        this.persistedContents = config.persistentCache() && effectiveContentCache
                 ? CompletableFuture.supplyAsync(this::loadContents, loader)
                 : CompletableFuture.completedFuture(Map.of());
-        this.persistedRoutes = config.persistentCache() && config.cacheResourceRoutes()
+        this.persistedRoutes = config.persistentCache() && effectiveRouteCache
                 ? CompletableFuture.supplyAsync(this::loadRoutes, loader)
                 : CompletableFuture.completedFuture(Map.of());
         this.vanillaClientFingerprint = new PackFingerprint("minecraft-client", mcVersion(), 0, 0);
@@ -156,6 +164,11 @@ public final class ResourceIndexCache {
     public void startCachePreload(PathPackResources pack) {
         if ((packExistenceCacheEnabled() || contentCacheEnabled() || pathIndexEnabled())
                 && config.persistentCache()) runtimePack(pack);
+    }
+
+    public PackView packView(PathPackResources pack) {
+        RuntimePack runtime = runtimePack(pack);
+        return runtime == null ? null : new PackView(this, runtime);
     }
 
     public Optional<Set<String>> findNamespaces(PathPackResources pack, PackType type) {
@@ -223,6 +236,13 @@ public final class ResourceIndexCache {
                 || !cacheable(location)) return original;
         RuntimePack runtime = runtimePack(pack);
         if (runtime == null) return original;
+        return wrapContent(runtime, type, location, original);
+    }
+
+    private IoSupplier<InputStream> wrapContent(RuntimePack runtime, PackType type, ResourceLocation location,
+                                                IoSupplier<InputStream> original) {
+        if (!contentCacheEnabled() || original == null || original instanceof CachedContentSupplier
+                || !cacheable(location)) return original;
         if (!runtime.contentLoad.isDone()) return original;
         awaitContentLoaded(runtime);
         ContentSlot slot = runtime.contents.computeIfAbsent(contentKey(type, location), ignored -> new ContentSlot());
@@ -332,7 +352,7 @@ public final class ResourceIndexCache {
     public Stats stats() {
         long entries = vanillaClient.size() + vanillaServer.size();
         for (Optional<RuntimePack> optional : runtimePacks.values()) {
-            if (optional.isPresent()) entries += optional.get().existences.size();
+            if (optional.isPresent()) entries += existenceEntryCount(optional.get());
         }
         long routeEntries = routeTables.values().stream().mapToLong(Map::size).sum();
         return new Stats(hits.get(), misses.get(), loadedPacks.get(), pathPacksLoaded.get(),
@@ -347,10 +367,14 @@ public final class ResourceIndexCache {
         if (!pathIndexEnabled()) return Optional.empty();
         RuntimePack runtime = runtimePack(pack);
         if (runtime == null) return Optional.empty();
-        List<String> values = runtime.paths.get(key);
+        return findPathGroup(runtime, key);
+    }
+
+    private Optional<List<String>> findPathGroup(RuntimePack runtime, String key) {
+        List<String> values = findPathValue(runtime, key);
         if (values == null && runtime.pathsLoad.isDone()) {
             awaitPathsLoaded(runtime);
-            values = runtime.paths.get(key);
+            values = findPathValue(runtime, key);
         }
         if (values == null) pathIndexMisses.incrementAndGet();
         else pathIndexHits.incrementAndGet();
@@ -361,18 +385,30 @@ public final class ResourceIndexCache {
         if (!pathIndexEnabled()) return;
         RuntimePack runtime = runtimePack(pack);
         if (runtime == null) return;
-        List<String> previous = runtime.paths.put(key, values);
-        if (!java.util.Objects.equals(previous, values)) runtime.pathsDirty.set(true);
+        recordPathGroup(runtime, key, values);
+    }
+
+    private void recordPathGroup(RuntimePack runtime, String key, List<String> values) {
+        List<String> persisted = runtime.persistedPaths.get(key);
+        ConcurrentHashMap<String, List<String>> overrides = runtime.pathOverrides;
+        List<String> previous = overrides == null ? persisted : overrides.getOrDefault(key, persisted);
+        if (java.util.Objects.equals(previous, values)) return;
+        pathOverrides(runtime).put(key, values);
+        runtime.pathsDirty.set(true);
     }
 
     private Optional<Boolean> find(PathPackResources pack, String key) {
         if (!packExistenceCacheEnabled()) return Optional.empty();
         RuntimePack runtime = runtimePack(pack);
         if (runtime == null) return Optional.empty();
-        Boolean result = runtime.existences.get(key);
+        return find(runtime, key);
+    }
+
+    private Optional<Boolean> find(RuntimePack runtime, String key) {
+        Boolean result = findExistenceValue(runtime, key);
         if (result == null && runtime.existencesLoad.isDone()) {
             awaitExistencesLoaded(runtime);
-            result = runtime.existences.get(key);
+            result = findExistenceValue(runtime, key);
         }
         if (result == null) {
             misses.incrementAndGet();
@@ -386,8 +422,16 @@ public final class ResourceIndexCache {
         if (!packExistenceCacheEnabled()) return;
         RuntimePack runtime = runtimePack(pack);
         if (runtime == null) return;
-        Boolean previous = runtime.existences.put(key, exists);
-        if (!java.util.Objects.equals(previous, exists)) runtime.existenceDirty.set(true);
+        record(runtime, key, exists);
+    }
+
+    private void record(RuntimePack runtime, String key, boolean exists) {
+        Boolean persisted = runtime.persistedExistences.get(key);
+        ConcurrentHashMap<String, Boolean> overrides = runtime.existenceOverrides;
+        Boolean previous = overrides == null ? persisted : overrides.getOrDefault(key, persisted);
+        if (java.util.Objects.equals(previous, exists)) return;
+        existenceOverrides(runtime).put(key, exists);
+        runtime.existenceDirty.set(true);
     }
 
     private RuntimePack runtimePack(PathPackResources pack) {
@@ -420,7 +464,11 @@ public final class ResourceIndexCache {
 
     private void loadExistences(RuntimePack runtime) {
         store.loadExistences(runtime.cacheId, runtime.fingerprint).ifPresent(existences -> {
-            runtime.existences.putAll(existences);
+            if (existences instanceof ResourceExistenceIndex) {
+                System.setProperty("lightload.resourceExistenceIndex", "compact");
+            }
+            runtime.persistedExistences = existences;
+            reconcileExistenceOverrides(runtime);
             loadedPacks.incrementAndGet();
         });
     }
@@ -428,7 +476,8 @@ public final class ResourceIndexCache {
     private void loadPaths(RuntimePack runtime, Map<String, ResourcePathStore.PersistedPaths> paths) {
         ResourcePathStore.PersistedPaths persisted = paths.remove(runtime.cacheId);
         if (persisted != null && persisted.fingerprint().equals(runtime.fingerprint)) {
-            runtime.paths.putAll(persisted.groups());
+            runtime.persistedPaths = persisted.groups();
+            reconcilePathOverrides(runtime);
             pathPacksLoaded.incrementAndGet();
         }
     }
@@ -445,7 +494,7 @@ public final class ResourceIndexCache {
     }
 
     private void loadVanilla(String id, PackFingerprint fingerprint, Map<String, Boolean> target) {
-        if (!config.persistentCache() || !config.cacheResourceExistence()) return;
+        if (!config.persistentCache() || !packExistenceCacheEnabled()) return;
         store.loadExistences(id, fingerprint).ifPresent(existences -> {
             target.putAll(existences);
             loadedPacks.incrementAndGet();
@@ -490,11 +539,89 @@ public final class ResourceIndexCache {
             runtime.contents.forEach((key, slot) -> {
                 if (slot.bytes != null) contents.put(key, slot.bytes);
             });
-            result.put(runtime.cacheId, new Snapshot(runtime.fingerprint, Map.copyOf(runtime.existences),
-                    Map.copyOf(contents), Map.copyOf(runtime.paths), runtime.existenceDirty.get(),
+            result.put(runtime.cacheId, new Snapshot(runtime.fingerprint, existenceSnapshot(runtime),
+                    Map.copyOf(contents), pathSnapshot(runtime), runtime.existenceDirty.get(),
                     runtime.pathsDirty.get()));
         });
         return Map.copyOf(result);
+    }
+
+    private static Boolean findExistenceValue(RuntimePack runtime, String key) {
+        ConcurrentHashMap<String, Boolean> overrides = runtime.existenceOverrides;
+        if (overrides != null) {
+            Boolean value = overrides.get(key);
+            if (value != null) return value;
+        }
+        return runtime.persistedExistences.get(key);
+    }
+
+    private static List<String> findPathValue(RuntimePack runtime, String key) {
+        ConcurrentHashMap<String, List<String>> overrides = runtime.pathOverrides;
+        if (overrides != null) {
+            List<String> value = overrides.get(key);
+            if (value != null) return value;
+        }
+        return runtime.persistedPaths.get(key);
+    }
+
+    private static ConcurrentHashMap<String, Boolean> existenceOverrides(RuntimePack runtime) {
+        ConcurrentHashMap<String, Boolean> overrides = runtime.existenceOverrides;
+        if (overrides != null) return overrides;
+        synchronized (runtime) {
+            if (runtime.existenceOverrides == null) runtime.existenceOverrides = new ConcurrentHashMap<>();
+            return runtime.existenceOverrides;
+        }
+    }
+
+    private static ConcurrentHashMap<String, List<String>> pathOverrides(RuntimePack runtime) {
+        ConcurrentHashMap<String, List<String>> overrides = runtime.pathOverrides;
+        if (overrides != null) return overrides;
+        synchronized (runtime) {
+            if (runtime.pathOverrides == null) runtime.pathOverrides = new ConcurrentHashMap<>();
+            return runtime.pathOverrides;
+        }
+    }
+
+    private static void reconcileExistenceOverrides(RuntimePack runtime) {
+        ConcurrentHashMap<String, Boolean> overrides = runtime.existenceOverrides;
+        if (overrides != null) {
+            overrides.entrySet().removeIf(entry ->
+                    java.util.Objects.equals(runtime.persistedExistences.get(entry.getKey()), entry.getValue()));
+        }
+    }
+
+    private static void reconcilePathOverrides(RuntimePack runtime) {
+        ConcurrentHashMap<String, List<String>> overrides = runtime.pathOverrides;
+        if (overrides != null) {
+            overrides.entrySet().removeIf(entry ->
+                    java.util.Objects.equals(runtime.persistedPaths.get(entry.getKey()), entry.getValue()));
+        }
+    }
+
+    private static Map<String, Boolean> existenceSnapshot(RuntimePack runtime) {
+        ConcurrentHashMap<String, Boolean> overrides = runtime.existenceOverrides;
+        if (overrides == null || overrides.isEmpty()) return runtime.persistedExistences;
+        Map<String, Boolean> merged = new java.util.HashMap<>(runtime.persistedExistences);
+        merged.putAll(overrides);
+        return Map.copyOf(merged);
+    }
+
+    private static Map<String, List<String>> pathSnapshot(RuntimePack runtime) {
+        ConcurrentHashMap<String, List<String>> overrides = runtime.pathOverrides;
+        if (overrides == null || overrides.isEmpty()) return runtime.persistedPaths;
+        Map<String, List<String>> merged = new java.util.HashMap<>(runtime.persistedPaths);
+        merged.putAll(overrides);
+        return Map.copyOf(merged);
+    }
+
+    private static long existenceEntryCount(RuntimePack runtime) {
+        long entries = runtime.persistedExistences.size();
+        ConcurrentHashMap<String, Boolean> overrides = runtime.existenceOverrides;
+        if (overrides == null) return entries;
+        for (String key : overrides.keySet()) {
+            if (!runtime.persistedExistences.containsKey(key)) entries++;
+        }
+        return entries;
     }
 
     private ConcurrentHashMap<String, Integer> routeTable(String layout) {
@@ -511,6 +638,7 @@ public final class ResourceIndexCache {
     }
 
     private void persist(String id, PackFingerprint fingerprint, Map<String, Boolean> existences) {
+        if (!store.canWriteExistences(id, existences.size(), config.maxExistenceCacheBytes())) return;
         try {
             store.writeExistences(id, fingerprint, existences);
             persistedPacks.incrementAndGet();
@@ -635,9 +763,11 @@ public final class ResourceIndexCache {
     private static final class RuntimePack {
         private final String cacheId;
         private final PackFingerprint fingerprint;
-        private final ConcurrentHashMap<String, Boolean> existences = new ConcurrentHashMap<>();
         private final ConcurrentHashMap<String, ContentSlot> contents = new ConcurrentHashMap<>();
-        private final ConcurrentHashMap<String, List<String>> paths = new ConcurrentHashMap<>();
+        private volatile Map<String, Boolean> persistedExistences = Map.of();
+        private volatile Map<String, List<String>> persistedPaths = Map.of();
+        private volatile ConcurrentHashMap<String, Boolean> existenceOverrides;
+        private volatile ConcurrentHashMap<String, List<String>> pathOverrides;
         private final AtomicBoolean existenceDirty = new AtomicBoolean();
         private final AtomicBoolean pathsDirty = new AtomicBoolean();
         private volatile CompletableFuture<Void> existencesLoad = CompletableFuture.completedFuture(null);
@@ -650,6 +780,61 @@ public final class ResourceIndexCache {
         private RuntimePack(String cacheId, PackFingerprint fingerprint) {
             this.cacheId = cacheId;
             this.fingerprint = fingerprint;
+        }
+    }
+
+    public static final class PackView {
+        private final ResourceIndexCache owner;
+        private final RuntimePack runtime;
+
+        private PackView(ResourceIndexCache owner, RuntimePack runtime) {
+            this.owner = owner;
+            this.runtime = runtime;
+        }
+
+        public Optional<Set<String>> findNamespaces(PackType type) {
+            if (!owner.pathIndexEnabled()) return Optional.empty();
+            return owner.findPathGroup(runtime, "N|" + type.name()).map(Set::copyOf);
+        }
+
+        public void recordNamespaces(PackType type, Set<String> namespaces) {
+            if (!owner.pathIndexEnabled()) return;
+            owner.recordPathGroup(runtime, "N|" + type.name(), namespaces.stream().sorted().toList());
+        }
+
+        public Optional<List<String>> findResourcePaths(PackType type, String namespace) {
+            if (!owner.pathIndexEnabled()) return Optional.empty();
+            return owner.findPathGroup(runtime, "P|" + type.name() + "|" + namespace);
+        }
+
+        public void recordResourcePaths(PackType type, String namespace, List<String> paths) {
+            if (!owner.pathIndexEnabled()) return;
+            owner.recordPathGroup(runtime, "P|" + type.name() + "|" + namespace, List.copyOf(paths));
+        }
+
+        public Optional<Boolean> findExistence(PackType type, ResourceLocation location) {
+            if (!owner.packExistenceCacheEnabled()) return Optional.empty();
+            return owner.find(runtime, type.name() + "|" + location);
+        }
+
+        public void recordExistence(PackType type, ResourceLocation location, boolean exists) {
+            if (!owner.packExistenceCacheEnabled()) return;
+            owner.record(runtime, type.name() + "|" + location, exists);
+        }
+
+        public Optional<Boolean> findRootExistence(String[] paths) {
+            if (!owner.packExistenceCacheEnabled()) return Optional.empty();
+            return owner.find(runtime, "ROOT|" + Arrays.toString(paths));
+        }
+
+        public void recordRootExistence(String[] paths, boolean exists) {
+            if (!owner.packExistenceCacheEnabled()) return;
+            owner.record(runtime, "ROOT|" + Arrays.toString(paths), exists);
+        }
+
+        public IoSupplier<InputStream> wrapContent(PackType type, ResourceLocation location,
+                                                   IoSupplier<InputStream> original) {
+            return owner.wrapContent(runtime, type, location, original);
         }
     }
 

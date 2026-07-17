@@ -30,6 +30,8 @@ final class RuntimePatchTransformer implements ClassFileTransformer {
     static final String MOD_JAR_METADATA =
             "net/minecraftforge/fml/loading/moddiscovery/ModJarMetadata";
     static final String JDK_MODULE_RESOLVER = "java/lang/module/Resolver";
+    static final String MODULE_CLASS_LOADER = "cpw/mods/cl/ModuleClassLoader";
+    static final String OBJECT_HOLDER_REGISTRY = "net/minecraftforge/registries/ObjectHolderRegistry";
     private static final String HOOKS = "com/lightload/agent/RuntimeTransformationHooks";
     private static final String TYPE_DESCRIPTOR = "Lorg/objectweb/asm/Type;";
     private final Instrumentation instrumentation;
@@ -62,7 +64,73 @@ final class RuntimePatchTransformer implements ClassFileTransformer {
         if (JDK_MODULE_RESOLVER.equals(className)) {
             return transformModuleResolver(module, classfileBuffer);
         }
+        if (MODULE_CLASS_LOADER.equals(className)) {
+            return transformModuleClassLoader(module, classfileBuffer);
+        }
+        if (OBJECT_HOLDER_REGISTRY.equals(className)) {
+            return transformObjectHolderRegistry(module, classfileBuffer);
+        }
         return null;
+    }
+
+    private byte[] transformObjectHolderRegistry(Module module, byte[] classfileBuffer) {
+        try {
+            openTargetModule(module, "net.minecraftforge.registries");
+            ClassNode node = new ClassNode(Opcodes.ASM9);
+            new ClassReader(classfileBuffer).accept(node, 0);
+            MethodNode method = find(node, "applyObjectHolders", "(Ljava/util/function/Predicate;)V");
+            String field = node.fields.stream()
+                    .filter(candidate -> "objectHolders".equals(candidate.name)
+                            && "Ljava/util/Set;".equals(candidate.desc))
+                    .map(candidate -> candidate.name).findFirst().orElse(null);
+            if (method == null || field == null) {
+                System.setProperty("lightload.runtimePatch.objectHolders", "unsupported");
+                return null;
+            }
+            reset(method);
+            method.instructions.add(new FieldInsnNode(Opcodes.GETSTATIC, node.name, field, "Ljava/util/Set;"));
+            method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+            method.instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HOOKS, "applyIndexedObjectHolders",
+                    "(Ljava/util/Set;Ljava/util/function/Predicate;)V", false));
+            method.instructions.add(new InsnNode(Opcodes.RETURN));
+            ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            node.accept(writer);
+            System.setProperty("lightload.runtimePatch.objectHolders", "instrumented");
+            return writer.toByteArray();
+        } catch (Throwable throwable) {
+            System.setProperty("lightload.runtimePatch.objectHolders", "failed");
+            System.err.println("[Lightload Agent] Object holder index patch failed: " + throwable);
+            return null;
+        }
+    }
+
+    private byte[] transformModuleClassLoader(Module module, byte[] classfileBuffer) {
+        try {
+            openTargetModule(module, null);
+            ClassNode node = new ClassNode(Opcodes.ASM9);
+            new ClassReader(classfileBuffer).accept(node, 0);
+            MethodNode method = find(node, "getClassBytes",
+                    "(Ljava/lang/module/ModuleReader;Ljava/lang/module/ModuleReference;Ljava/lang/String;)[B");
+            if (method == null) {
+                System.setProperty("lightload.runtimePatch.classBytes", "unsupported-method");
+                return null;
+            }
+            reset(method);
+            method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 1));
+            method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 2));
+            method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 3));
+            method.instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HOOKS, "readClassBytes",
+                    "(Ljava/lang/module/ModuleReader;Ljava/lang/module/ModuleReference;Ljava/lang/String;)[B", false));
+            method.instructions.add(new InsnNode(Opcodes.ARETURN));
+            ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            node.accept(writer);
+            System.setProperty("lightload.runtimePatch.classBytes", "persistent-raw");
+            return writer.toByteArray();
+        } catch (Throwable throwable) {
+            System.setProperty("lightload.runtimePatch.classBytes", "failed");
+            System.err.println("[Lightload Agent] Module class byte reader patch failed: " + throwable);
+            return null;
+        }
     }
 
     private byte[] transformModJarMetadata(Module module, byte[] classfileBuffer) {

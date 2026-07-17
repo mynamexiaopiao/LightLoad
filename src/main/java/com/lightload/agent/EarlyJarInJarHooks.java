@@ -5,6 +5,7 @@ import java.lang.reflect.Method;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -22,6 +23,7 @@ public final class EarlyJarInJarHooks {
     private static final String METADATA_PATH = "META-INF/jarjar/metadata.json";
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
     private static final ThreadLocal<ScanSession> SESSION = new ThreadLocal<>();
+    private static final FileSystem DEFAULT_FILE_SYSTEM = Path.of(".").getFileSystem();
     private static volatile Path indexPath;
     private static volatile int threads = 4;
     private static volatile boolean parallelMetadata = true;
@@ -45,6 +47,7 @@ public final class EarlyJarInJarHooks {
         try {
             List<Object> mods = toList(loadedMods);
             parents = fingerprint(mods);
+            RuntimeTransformationHooks.activateClassByteCache(targetFingerprint, parents);
             Path path = indexPath;
             if (path != null && Files.isRegularFile(path)) {
                 JarJarIndex index = JarJarIndexStore.read(path);
@@ -207,15 +210,27 @@ public final class EarlyJarInJarHooks {
         for (int index = 0; index < mods.size(); index++) {
             Object mod = mods.get(index);
             Path path = physicalPath(mod);
-            boolean regularFile = Files.isRegularFile(path);
-            long size = regularFile ? Files.size(path) : -1;
-            long modified = regularFile ? Files.getLastModifiedTime(path).toMillis() : -1;
-            boolean physical = path.getFileSystem() == Path.of(".").getFileSystem()
+            ParentFingerprint fileFingerprint = fileFingerprint(path);
+            boolean physical = path.getFileSystem() == DEFAULT_FILE_SYSTEM
                     && !path.toString().isBlank();
             String identity = physical ? path.toString() : virtualIdentity(mod, index);
-            result.add(new ParentFingerprint(identity, size, modified));
+            result.add(new ParentFingerprint(identity, fileFingerprint.size(), fileFingerprint.modifiedMillis()));
         }
         return List.copyOf(result);
+    }
+
+    /** Reads the complete cache-key metadata in one filesystem operation per parent. */
+    static ParentFingerprint fileFingerprint(Path path) {
+        try {
+            BasicFileAttributes attributes = Files.readAttributes(path, BasicFileAttributes.class);
+            if (attributes.isRegularFile()) {
+                return new ParentFingerprint(path.toString(), attributes.size(),
+                        attributes.lastModifiedTime().toMillis());
+            }
+        } catch (Exception ignored) {
+            // Keep normal Forge discovery resilient to unavailable or non-regular paths.
+        }
+        return new ParentFingerprint(path.toString(), -1, -1);
     }
 
     private static Object secureJar(Object mod) throws Exception {
@@ -318,7 +333,7 @@ public final class EarlyJarInJarHooks {
                 Method method = findMethod(mod.getClass(), "getFilePath", 0);
                 method.setAccessible(true);
                 FileSystem fileSystem = ((Path) method.invoke(mod)).getFileSystem();
-                if (fileSystem != Path.of(".").getFileSystem() && fileSystem.isOpen()) fileSystem.close();
+                if (fileSystem != DEFAULT_FILE_SYSTEM && fileSystem.isOpen()) fileSystem.close();
             } catch (Throwable ignored) {
             }
         }
@@ -362,7 +377,7 @@ public final class EarlyJarInJarHooks {
                 try {
                     secureJarIndexes.put(secureJar(mod), index);
                     Path path = physicalPath(mod);
-                    if (path.getFileSystem() == Path.of(".").getFileSystem() && !path.toString().isBlank()) {
+                    if (path.getFileSystem() == DEFAULT_FILE_SYSTEM && !path.toString().isBlank()) {
                         physicalPathIndexes.putIfAbsent(path.toString(), index);
                     } else {
                         virtualIndexes.putIfAbsent(virtualIdentityBase(mod), index);
@@ -379,7 +394,7 @@ public final class EarlyJarInJarHooks {
                 index = secureJarIndexes.get(secureJar(parent));
                 if (index != null) return index;
                 Path path = physicalPath(parent);
-                if (path.getFileSystem() == Path.of(".").getFileSystem() && !path.toString().isBlank()) {
+                if (path.getFileSystem() == DEFAULT_FILE_SYSTEM && !path.toString().isBlank()) {
                     return physicalPathIndexes.get(path.toString());
                 }
                 return virtualIndexes.get(virtualIdentityBase(parent));

@@ -37,6 +37,26 @@ public abstract class DelegatingPackResourcesMixin {
     @Unique
     private Map<String, String> lightload$dataLayouts = Map.of();
 
+    /**
+     * Forge already builds namespace-specific delegate lists for point lookups, but its
+     * listResources implementation still visits every mod pack. Large installations end
+     * up making the same empty call hundreds of times for every resource-list query.
+     */
+    @Inject(method = {"listResources", "m_8031_"}, at = @At("HEAD"), cancellable = true,
+            require = 1, remap = false)
+    private void lightload$listNamespaceResources(PackType type, String namespace, String path,
+                                                   PackResources.ResourceOutput output, CallbackInfo ci) {
+        Map<String, List<PackResources>> candidatesByNamespace = type == PackType.CLIENT_RESOURCES
+                ? namespacesAssets : namespacesData;
+        List<PackResources> candidates = candidatesByNamespace.get(namespace);
+        if (candidates != null) {
+            for (PackResources candidate : candidates) {
+                candidate.listResources(type, namespace, path, output);
+            }
+        }
+        ci.cancel();
+    }
+
     @Inject(method = "<init>", at = @At("RETURN"), require = 1, remap = false)
     private void lightload$prepareRouteLayouts(String packId, boolean builtin, PackMetadataSection metadata,
                                                List<? extends PackResources> packs, CallbackInfo ci) {

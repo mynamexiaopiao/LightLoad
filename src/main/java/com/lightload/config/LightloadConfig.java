@@ -17,11 +17,6 @@ public record LightloadConfig(
         boolean profiling,
         boolean showLoadingTime,
         boolean aggressiveStartup,
-        boolean dedicatedReloadExecutor,
-        int reloadThreads,
-        boolean lazyDataFixer,
-        boolean progressiveModelWarmup,
-        boolean fastTextureStitching,
         boolean lazyBlockStateCache,
         boolean deferRemoteConfigDownloads,
         boolean deferYaclImagePreload,
@@ -30,6 +25,7 @@ public record LightloadConfig(
         boolean lightspeedModernFixInterop,
         boolean cacheResourceRoutes,
         boolean cacheResourceExistence,
+        long maxExistenceCacheBytes,
         boolean cacheResourceContent,
         long maxContentCacheBytes,
         int maxCachedResourceBytes,
@@ -38,7 +34,8 @@ public record LightloadConfig(
         boolean isolateModdedResourceReloadFailures,
         String isolatedResourceReloadListenerPatterns,
         boolean connectorCompatibilityMode,
-        String optimizationProfile
+        String optimizationProfile,
+        boolean earlyAgent
 ) {
     public static LightloadConfig load(Path configDirectory) {
         Path path = configDirectory.resolve("lightload.properties");
@@ -66,11 +63,6 @@ public record LightloadConfig(
                 bool(properties, "profiling", true),
                 bool(properties, "showLoadingTime", true),
                 bool(properties, "aggressiveStartup", true),
-                bool(properties, "dedicatedReloadExecutor", true),
-                (int) clamp(number(properties, "reloadThreads", 0), 0, 64),
-                bool(properties, "lazyDataFixer", true),
-                bool(properties, "progressiveModelWarmup", true),
-                bool(properties, "fastTextureStitching", true),
                 bool(properties, "lazyBlockStateCache", true),
                 bool(properties, "deferRemoteConfigDownloads", true),
                 bool(properties, "deferYaclImagePreload", true),
@@ -79,36 +71,41 @@ public record LightloadConfig(
                 bool(properties, "lightspeedModernFixInterop", true),
                 bool(properties, "cacheResourceRoutes", false),
                 bool(properties, "cacheResourceExistence", true),
+                clamp(number(properties, "maxExistenceCacheMiB", 256), 16, 2048) * 1024L * 1024L,
                 bool(properties, "cacheResourceContent", false),
                 clamp(number(properties, "maxContentCacheMiB", 256), 16, 1024) * 1024L * 1024L,
                 (int) (clamp(number(properties, "maxCachedResourceKiB", 1024), 16, 8192) * 1024L),
                 bool(properties, "parallelResourceLookup", true),
-                (int) clamp(number(properties, "parallelLookupMinPacks", 4), 2, 64),
+                (int) clamp(number(properties, "parallelLookupMinPacks", 16), 2, 64),
                 bool(properties, "isolateModdedResourceReloadFailures", true),
                 properties.getProperty("isolatedResourceReloadListenerPatterns", "*"),
                 bool(properties, "connectorCompatibilityMode", true),
-                profile(properties.getProperty("optimizationProfile")));
+                profile(properties.getProperty("optimizationProfile")),
+                bool(properties, "earlyAgent", true));
     }
 
     public LightloadConfig(boolean enabled, boolean memoryCache, boolean persistentCache,
                            boolean profiling, long ignoredCacheLimit) {
-        this(enabled, memoryCache, persistentCache, profiling, true, true, true, 0,
-                true, true, true, true, true, true, true, true, true, true, true, true,
-                256L * 1024 * 1024, 1024 * 1024, true, 4, true, "*", true, "auto");
+        this(enabled, memoryCache, persistentCache, profiling, true, true, true,
+                true, true, true, true, true, true, true,
+                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024,
+                true, 16, true, "*", true, "auto", true);
     }
 
     public LightloadConfig(boolean enabled, boolean memoryCache, boolean persistentCache,
                            boolean profiling, long ignoredCacheLimit, boolean cacheResourceExistence) {
-        this(enabled, memoryCache, persistentCache, profiling, true, true, true, 0,
-                true, true, true, true, true, true, true, true, true, false, cacheResourceExistence, true,
-                256L * 1024 * 1024, 1024 * 1024, true, 4, true, "*", true, "auto");
+        this(enabled, memoryCache, persistentCache, profiling, true, true, true,
+                true, true, true, true, true, false, cacheResourceExistence,
+                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024,
+                true, 16, true, "*", true, "auto", true);
     }
 
     public LightloadConfig(boolean enabled, boolean memoryCache, boolean persistentCache,
                            boolean profiling, boolean showLoadingTime, long ignoredCacheLimit) {
-        this(enabled, memoryCache, persistentCache, profiling, showLoadingTime, true, true, 0,
-                true, true, true, true, true, true, true, true, true, true, true, true,
-                256L * 1024 * 1024, 1024 * 1024, true, 4, true, "*", true, "auto");
+        this(enabled, memoryCache, persistentCache, profiling, showLoadingTime, true, true,
+                true, true, true, true, true, true, true,
+                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024,
+                true, 16, true, "*", true, "auto", true);
     }
 
     private static Properties defaults() {
@@ -118,19 +115,15 @@ public record LightloadConfig(
         properties.setProperty("persistentCache", "true");
         properties.setProperty("cacheResourceRoutes", "false");
         properties.setProperty("cacheResourceExistence", "true");
+        properties.setProperty("maxExistenceCacheMiB", "256");
         properties.setProperty("cacheResourceContent", "false");
         properties.setProperty("maxContentCacheMiB", "256");
         properties.setProperty("maxCachedResourceKiB", "1024");
         properties.setProperty("parallelResourceLookup", "true");
-        properties.setProperty("parallelLookupMinPacks", "4");
+        properties.setProperty("parallelLookupMinPacks", "16");
         properties.setProperty("isolateModdedResourceReloadFailures", "true");
         properties.setProperty("isolatedResourceReloadListenerPatterns", "*");
         properties.setProperty("connectorCompatibilityMode", "true");
-        properties.setProperty("dedicatedReloadExecutor", "true");
-        properties.setProperty("reloadThreads", "0");
-        properties.setProperty("lazyDataFixer", "true");
-        properties.setProperty("progressiveModelWarmup", "true");
-        properties.setProperty("fastTextureStitching", "true");
         properties.setProperty("lazyBlockStateCache", "true");
         properties.setProperty("deferRemoteConfigDownloads", "true");
         properties.setProperty("deferYaclImagePreload", "true");

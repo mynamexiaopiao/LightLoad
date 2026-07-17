@@ -22,6 +22,8 @@ import java.util.function.Supplier;
 
 /** Ordered parallel lookup for immutable vanilla and Forge mod resource packs. */
 public final class ResourceLookupOptimizer {
+    private static final int MAX_LOOKUP_WORKERS = 8;
+    private static final int LOOKUP_WAVE_SIZE = 8;
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
     private static final LongAdder PARALLEL_LOOKUPS = new LongAdder();
     private static volatile ExecutorService executor;
@@ -39,6 +41,7 @@ public final class ResourceLookupOptimizer {
     public static LookupResult findFirst(List<PackResources> packs, PackType type, ResourceLocation location) {
         if (packs == null || packs.isEmpty()) return null;
         int threshold = StartupCoordinator.config().parallelLookupMinPacks();
+        if (CompatibilityManager.modernFixPresent()) threshold = Math.max(threshold, 16);
         if (!enabled() || packs.size() < threshold || packs.stream().anyMatch(pack -> !isSafe(pack))) {
             return sequential(packs, type, location);
         }
@@ -62,20 +65,32 @@ public final class ResourceLookupOptimizer {
         if (lookups.isEmpty()) return null;
         if (lookups.size() < threshold) return sequentialOrdered(lookups);
 
-        List<CompletableFuture<T>> futures = new ArrayList<>(lookups.size());
+        List<CompletableFuture<T>> activeWave = List.of();
         try {
-            for (Supplier<T> lookup : lookups) {
-                futures.add(CompletableFuture.supplyAsync(lookup, executor));
-            }
-            for (int index = 0; index < futures.size(); index++) {
-                T value = futures.get(index).join();
-                if (value != null) return new OrderedResult<>(index, value);
+            for (int base = 0; base < lookups.size(); base += LOOKUP_WAVE_SIZE) {
+                int end = Math.min(lookups.size(), base + LOOKUP_WAVE_SIZE);
+                List<CompletableFuture<T>> wave = new ArrayList<>(end - base);
+                activeWave = wave;
+                for (int index = base; index < end; index++) {
+                    wave.add(CompletableFuture.supplyAsync(lookups.get(index), executor));
+                }
+                for (int offset = 0; offset < wave.size(); offset++) {
+                    T value = wave.get(offset).join();
+                    if (value != null) {
+                        cancel(wave, offset + 1);
+                        return new OrderedResult<>(base + offset, value);
+                    }
+                }
             }
             return null;
         } catch (RuntimeException exception) {
-            futures.forEach(future -> future.cancel(false));
+            cancel(activeWave, 0);
             return sequentialOrdered(lookups);
         }
+    }
+
+    private static void cancel(List<? extends CompletableFuture<?>> futures, int fromIndex) {
+        for (int index = fromIndex; index < futures.size(); index++) futures.get(index).cancel(false);
     }
 
     private static LookupResult sequential(List<PackResources> packs, PackType type, ResourceLocation location) {
@@ -108,7 +123,8 @@ public final class ResourceLookupOptimizer {
         synchronized (ResourceLookupOptimizer.class) {
             current = executor;
             if (current == null) {
-                int workers = Math.max(2, Math.min(Runtime.getRuntime().availableProcessors(), 16));
+                int workers = Math.max(2, Math.min(
+                        Math.max(2, Runtime.getRuntime().availableProcessors() / 2), MAX_LOOKUP_WORKERS));
                 current = Executors.newFixedThreadPool(workers, runnable -> {
                     Thread thread = new Thread(runnable, "Lightload-Resource-" + THREAD_ID.incrementAndGet());
                     thread.setDaemon(true);

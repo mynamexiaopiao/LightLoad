@@ -31,8 +31,9 @@ final class ResourceExistenceStore {
             if (magic == MAGIC && schema == SCHEMA) {
                 verifyVersions(input, minecraftVersion, forgeVersion);
                 PackFingerprint fingerprint = readFingerprint(input);
+                if (!fingerprint.equals(expected)) return Optional.empty();
                 Map<String, Boolean> existences = readExistences(input);
-                return fingerprint.equals(expected) ? Optional.of(Map.copyOf(existences)) : Optional.empty();
+                return Optional.of(existences);
             }
             if (magic == LEGACY_MAGIC && schema == LEGACY_SCHEMA) {
                 return readLegacy(input, minecraftVersion, forgeVersion, expected);
@@ -112,9 +113,7 @@ final class ResourceExistenceStore {
 
     private static Map<String, Boolean> readExistences(DataInputStream input) throws IOException {
         int size = count(input.readInt());
-        Map<String, Boolean> result = new HashMap<>(size);
-        for (int i = 0; i < size; i++) result.put(input.readUTF(), input.readBoolean());
-        return result;
+        return ResourceExistenceIndex.read(input, size);
     }
 
     private static int count(int value) throws IOException {

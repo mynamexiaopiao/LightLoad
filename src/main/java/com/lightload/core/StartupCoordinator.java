@@ -76,8 +76,9 @@ public final class StartupCoordinator {
         }
         cache = new ResourceIndexCache(config, cacheDirectory);
         optimizationsActive = cache.isUsable();
-        if (CompatibilityManager.modernFixPresent()) {
-            LightloadMod.LOGGER.info("[Lightload] ModernFix owns DFU, reload executor, stitcher, and model layers; Lightload resource caches remain active");
+        if (config.earlyAgent() && !Boolean.getBoolean("lightload.agent.active")) {
+            LightloadMod.LOGGER.warn(
+                    "[Lightload] Embedded early bootstrap is inactive; early class caching is unavailable for this launch");
         }
         LightloadMod.LOGGER.info("[Lightload] Adaptive startup optimizations are enabled");
     }
@@ -158,13 +159,10 @@ public final class StartupCoordinator {
     public static void startupCompleted() {
         initialize();
         if (!COMPLETED.compareAndSet(false, true)) return;
-        if (config.progressiveModelWarmup() && aggressiveOptimizationsEnabled()) {
-            LazyDataFixerManager.prewarmAsync(StartupCoordinator::aggressiveWarmupCompleted);
-        } else {
-            aggressiveWarmupCompleted();
-        }
+        aggressiveWarmupCompleted();
         ResourceIndexCache currentCache = cache;
         if (currentCache != null) currentCache.persistAsync();
+        finishEarlyAgentClassCache();
         try {
             if (startupLock != null) Files.deleteIfExists(startupLock);
             Path agentGameDirectory = Path.of(System.getProperty("lightload.agent.gameDir", FMLPaths.GAMEDIR.get().toString()));
@@ -183,6 +181,14 @@ public final class StartupCoordinator {
             if (warmupLock != null) Files.deleteIfExists(warmupLock);
         } catch (IOException exception) {
             LightloadMod.LOGGER.debug("[Lightload] Could not clear warmup marker", exception);
+        }
+    }
+
+    private static void finishEarlyAgentClassCache() {
+        try {
+            Class.forName("com.lightload.agent.RuntimeTransformationHooks", true, null)
+                    .getMethod("finishClassByteCache").invoke(null);
+        } catch (ReflectiveOperationException ignored) {
         }
     }
 
@@ -260,9 +266,12 @@ public final class StartupCoordinator {
                         "contentServed={} KiB, contentMemory={} MiB, contentDisk={} MiB, " +
                         "routeHits={}, routeMisses={}, routeRepairs={}, routeLayouts={}, routeEntries={}, routeDisk={} KiB, " +
                         "pathIndexHits={}, pathIndexMisses={}, asyncPathScans={}, " +
-                        "aggressive={}, reloadExecutor={}, lazyDfu={}, fastStitch={}, " +
+                        "aggressive={}, " +
                         "modernFix={}, optimizationProfile={}, recovery={}, earlyAgent={}, agentCache={}, agentCacheReason={}, agentCacheRecordReason={}, " +
-                        "runtimeAgent={}, runtimePatch={}, mixinOpcodeCache={}, mixinTargetIndex={}, oculusPathPatch={}, " +
+                        "runtimeAgent={}, runtimePatch={}, forgeLazy={}, classBytes={}, classArchive={}, classArchiveEntries={}, " +
+                        "classArchiveBytes={}, classArchiveHits={}, classArchiveMisses={}, " +
+                        "objectHolders={}, objectHolderIndexed={}, objectHolderGeneric={}, objectHolderCandidates={}, objectHolderTotal={}, " +
+                        "mixinOpcodeCache={}, mixinTargetIndex={}, oculusPathPatch={}, " +
                         "mixinTargetConfigs={}, mixinTargetClasses={}, modulePackageIndex={}, modulePackages={}, " +
                         "modulePackageHits={}, modulePackageMisses={}, moduleClosure={}, moduleClosureSkips={}, " +
                         "moduleClosureFallbacks={}, moduleClosureGraphSize={}, " +
@@ -270,8 +279,7 @@ public final class StartupCoordinator {
                         "deferRemoteDownloads={}, deferredRemoteDownloads={}, " +
                         "forgeRegistryCache={}, registryCacheHits={}, registryCacheMisses={}, registryCacheEntries={}, " +
                         "shapeCacheHits={}, shapeCacheMisses={}, shapeCacheEntries={}, shapeCacheRejected={}, " +
-                        "routeCache={}, packExistenceCache={}, existenceCache={}, contentCache={}, parallelResourceLookup={}, parallelLookups={}, lightspeedInterop={}, " +
-                        "effectiveReloadExecutor={}, effectiveLazyDfu={}, effectiveFastStitch={}",
+                        "routeCache={}, packExistenceCache={}, existenceCache={}, existenceIndex={}, contentCache={}, parallelResourceLookup={}, parallelLookups={}, lightspeedInterop={}",
                 total, construction, reload, stats.hits(), stats.misses(), stats.loadedPacks(),
                 stats.pathPacksLoaded(), stats.persistedPacks(),
                 stats.entries(), stats.diskBytes() / 1024, stats.contentHits(), stats.contentMisses(),
@@ -281,13 +289,24 @@ public final class StartupCoordinator {
                 stats.routeDiskBytes() / 1024,
                 stats.pathIndexHits(), stats.pathIndexMisses(), stats.asyncScans(),
                 aggressiveOptimizationsEnabled(),
-                config.dedicatedReloadExecutor(), config.lazyDataFixer(), config.fastTextureStitching(),
                 CompatibilityManager.modernFixPresent(), CompatibilityManager.optimizationProfile(config), recoveryMode,
                 Boolean.getBoolean("lightload.agent.active"), System.getProperty("lightload.agent.cache", "inactive"),
                 System.getProperty("lightload.agent.cache.reason", "none"),
                 System.getProperty("lightload.agent.cache.recordReason", "none"),
                 Boolean.getBoolean("lightload.runtimeAgent.active"),
                 System.getProperty("lightload.runtimeAgent.status", "inactive"),
+                System.getProperty("lightload.compat.forgeLazy", "inactive"),
+                System.getProperty("lightload.runtimePatch.classBytes", "inactive"),
+                System.getProperty("lightload.runtimePatch.classArchive", "inactive"),
+                System.getProperty("lightload.runtimePatch.classArchiveEntries", "0"),
+                System.getProperty("lightload.runtimePatch.classArchiveBytes", "0"),
+                System.getProperty("lightload.runtimePatch.classArchiveHits", "0"),
+                System.getProperty("lightload.runtimePatch.classArchiveMisses", "0"),
+                System.getProperty("lightload.runtimePatch.objectHolders", "inactive"),
+                System.getProperty("lightload.runtimePatch.objectHolderIndexed", "0"),
+                System.getProperty("lightload.runtimePatch.objectHolderGeneric", "0"),
+                System.getProperty("lightload.runtimePatch.objectHolderCandidates", "0"),
+                System.getProperty("lightload.runtimePatch.objectHolderTotal", "0"),
                 System.getProperty("lightload.runtimePatch.mixinOpcode", "inactive"),
                 System.getProperty("lightload.runtimePatch.mixinTargets", "inactive"),
                 System.getProperty("lightload.runtimePatch.oculusPath", "inactive"),
@@ -311,12 +330,10 @@ public final class StartupCoordinator {
                 currentCache != null && currentCache.routeCacheEnabled(),
                 currentCache != null && currentCache.packExistenceCacheEnabled(),
                 currentCache != null && currentCache.existenceCacheEnabled(),
+                System.getProperty("lightload.resourceExistenceIndex", "inactive"),
                 currentCache != null && currentCache.contentCacheEnabled(),
                 ResourceLookupOptimizer.enabled(), ResourceLookupOptimizer.parallelLookups(),
-                CompatibilityManager.lightspeedModernFixInteropEnabled(config),
-                config.dedicatedReloadExecutor() && !CompatibilityManager.modernFixPresent(),
-                config.lazyDataFixer() && !CompatibilityManager.modernFixPresent(),
-                config.fastTextureStitching() && !CompatibilityManager.modernFixPresent()
+                CompatibilityManager.lightspeedModernFixInteropEnabled(config)
         );
     }
 

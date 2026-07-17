@@ -165,8 +165,8 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testImplementation sourceSets.agent.output
-    agentShade 'org.ow2.asm:asm:9.7.1'
-    agentShade 'org.ow2.asm:asm-tree:9.7.1'
+    agentShade 'org.ow2.asm:asm:9.9'
+    agentShade 'org.ow2.asm:asm-tree:9.9'
 
     // Example mod dependency with JEI - using fg.deobf() ensures the dependency is remapped to your development mappings
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
@@ -219,7 +219,8 @@ tasks.named('jar', Jar).configure {
                 'Premain-Class'           : 'com.lightload.agent.LightloadAgent',
                 'Agent-Class'             : 'com.lightload.agent.LightloadAgent',
                 'Can-Redefine-Classes'    : 'false',
-                'Can-Retransform-Classes' : 'true'
+                'Can-Retransform-Classes' : 'true',
+                'Automatic-Module-Name'   : 'lightload'
         ])
     }
 
@@ -257,14 +258,52 @@ def agentShadowJar = tasks.register('agentShadowJar', com.github.jengelman.gradl
     relocate 'org.objectweb.asm', 'com.lightload.shadow.asm'
 }
 
+def bootstrapJar = tasks.register('bootstrapJar', Jar) {
+    dependsOn agentShadowJar
+    dependsOn tasks.named('reobfShadowJar')
+    archiveBaseName = mod_id
+    archiveClassifier = ''
+    from(sourceSets.main.output) {
+        include 'com/lightload/bootstrap/**'
+        include 'META-INF/services/net.minecraftforge.forgespi.locating.IModLocator'
+    }
+    from({ zipTree(agentShadowJar.get().archiveFile.get().asFile) }) {
+        exclude 'META-INF/MANIFEST.MF'
+        exclude 'module-info.class'
+        exclude 'META-INF/versions/**/module-info.class'
+    }
+    from({ tasks.named('shadowJar').get().archiveFile.get().asFile }) {
+        into 'META-INF/lightload'
+        rename { 'lightload-game.jar' }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes([
+                'Implementation-Title'    : 'Lightload Bootstrap',
+                'Implementation-Version'  : project.version,
+                'Implementation-Vendor'   : mod_authors,
+                'Agent-Class'             : 'com.lightload.agent.LightloadAgent',
+                'Premain-Class'           : 'com.lightload.agent.LightloadAgent',
+                'Can-Redefine-Classes'    : 'false',
+                'Can-Retransform-Classes' : 'true',
+                'Automatic-Module-Name'   : 'lightload.bootstrap'
+        ])
+    }
+}
+
 tasks.named('shadowJar', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar).configure {
     dependsOn agentShadowJar
-    archiveClassifier = ''
+    archiveClassifier = 'game-internal'
+    destinationDirectory = layout.buildDirectory.dir('tmp/gamePayload')
     configurations = []
     from({ zipTree(agentShadowJar.get().archiveFile.get().asFile) }) {
         exclude 'META-INF/MANIFEST.MF'
     }
     manifest.inheritFrom tasks.named('jar', Jar).get().manifest
+    exclude 'com/lightload/bootstrap/**'
+    exclude 'com/lightload/agent/**'
+    exclude 'com/lightload/shadow/**'
+    exclude 'META-INF/services/net.minecraftforge.forgespi.locating.IModLocator'
 }
 
 reobf {
@@ -273,6 +312,7 @@ reobf {
 
 tasks.register('verifyShadowIsolation') {
     dependsOn tasks.named('shadowJar')
+    dependsOn bootstrapJar
     doLast {
         def shadow = tasks.named('shadowJar').get().archiveFile.get().asFile
         def jar = new java.util.jar.JarFile(shadow)
@@ -286,21 +326,45 @@ tasks.register('verifyShadowIsolation') {
                 throw new GradleException('Mixin plugin ASM signature was relocated')
             }
 
-            def transformerEntry = jar.getJarEntry('com/lightload/agent/JarInJarTransformer.class')
+        } finally {
+            jar.close()
+        }
+        def bootstrap = bootstrapJar.get().archiveFile.get().asFile
+        def bootstrapArchive = new java.util.jar.JarFile(bootstrap)
+        try {
+            def transformerEntry = bootstrapArchive.getJarEntry('com/lightload/agent/JarInJarTransformer.class')
             if (transformerEntry == null) throw new GradleException('Agent transformer is missing from the final JAR')
-            def transformerBytes = jar.getInputStream(transformerEntry).readAllBytes()
+            def transformerBytes = bootstrapArchive.getInputStream(transformerEntry).readAllBytes()
             def transformerConstants = new String(transformerBytes, java.nio.charset.StandardCharsets.ISO_8859_1)
             if (!transformerConstants.contains('com/lightload/shadow/asm/ClassReader')) {
                 throw new GradleException('Agent transformer is not using isolated ASM')
             }
+            def payloadEntry = bootstrapArchive.getJarEntry('META-INF/lightload/lightload-game.jar')
+            if (payloadEntry == null) throw new GradleException('Embedded GAME payload is missing from the bundle')
+            def payloadBytes = bootstrapArchive.getInputStream(payloadEntry).readAllBytes()
+            def payloadInput = new java.util.jar.JarInputStream(new java.io.ByteArrayInputStream(payloadBytes))
+            try {
+                def names = [] as Set
+                for (def entry = payloadInput.nextJarEntry; entry != null; entry = payloadInput.nextJarEntry) {
+                    names.add(entry.name)
+                }
+                if (!names.contains('META-INF/mods.toml') ||
+                        !names.contains('com/lightload/LightloadMod.class') ||
+                        names.any { it.startsWith('com/lightload/agent/') || it.startsWith('com/lightload/bootstrap/') }) {
+                    throw new GradleException('Embedded GAME payload has invalid layer contents')
+                }
+            } finally {
+                payloadInput.close()
+            }
         } finally {
-            jar.close()
+            bootstrapArchive.close()
         }
     }
 
 }
 
 tasks.named('build').configure {
+    dependsOn bootstrapJar
     dependsOn tasks.named('reobfShadowJar')
     dependsOn tasks.named('verifyShadowIsolation')
 }

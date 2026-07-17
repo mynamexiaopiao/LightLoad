@@ -5,6 +5,7 @@ import com.lightload.cache.ResourceIndexCache;
 import com.lightload.core.ModFileBackedResourcePack;
 import com.lightload.core.FusionPackCompat;
 import com.lightload.core.StartupCoordinator;
+import com.lightload.core.SortedStringLookup;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
@@ -47,6 +48,14 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
     private boolean lightload$routeSafe;
     @Unique
     private volatile Set<String> lightload$scheduledPathScans;
+    @Unique
+    private volatile Map<PackType, Set<String>> lightload$namespaceIndex;
+    @Unique
+    private volatile Map<String, List<String>> lightload$resourcePathIndex;
+    @Unique
+    private volatile ResourceIndexCache.PackView lightload$packView;
+    @Unique
+    private volatile boolean lightload$packViewResolved;
 
     @Override
     public void lightload$bindModFile(IModFile modFile) {
@@ -57,13 +66,20 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
                 .orElse(null);
         lightload$routeSafe = lightload$cacheIdentity != null && !FusionPackCompat.hasOverrides(this);
         ResourceIndexCache cache = StartupCoordinator.cache();
-        if (cache != null) cache.bindModFile(lightload$self(), modFile);
+        if (cache != null) {
+            cache.bindModFile(lightload$self(), modFile);
+            lightload$packView = cache.packView(lightload$self());
+            lightload$packViewResolved = true;
+        }
     }
 
     @Override
     public void lightload$startCachePreload() {
         ResourceIndexCache cache = StartupCoordinator.cache();
-        if (cache != null) cache.startCachePreload(lightload$self());
+        if (cache != null) {
+            cache.startCachePreload(lightload$self());
+            lightload$view(cache);
+        }
     }
 
     @Override
@@ -99,7 +115,17 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
     private void lightload$findNamespaces(PackType type, CallbackInfoReturnable<Set<String>> cir) {
         ResourceIndexCache cache = StartupCoordinator.cache();
         if (cache == null || !cache.pathIndexEnabled() || FusionPackCompat.hasOverrides(this)) return;
-        cache.findNamespaces(lightload$self(), type).ifPresent(cir::setReturnValue);
+        Set<String> local = lightload$namespaceIndex().get(type);
+        if (local != null) {
+            cir.setReturnValue(local);
+            return;
+        }
+        ResourceIndexCache.PackView view = lightload$view(cache);
+        if (view == null) return;
+        view.findNamespaces(type).ifPresent(namespaces -> {
+            lightload$namespaceIndex().put(type, namespaces);
+            cir.setReturnValue(namespaces);
+        });
     }
 
     @Inject(method = {"getNamespaces", "m_5698_"}, at = @At("RETURN"), require = 0, remap = false)
@@ -108,7 +134,10 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         Set<String> namespaces = cir.getReturnValue();
         if (cache != null && cache.pathIndexEnabled() && namespaces != null
                 && !FusionPackCompat.hasOverrides(this)) {
-            cache.recordNamespaces(lightload$self(), type, namespaces);
+            ResourceIndexCache.PackView view = lightload$view(cache);
+            if (view == null) return;
+            view.recordNamespaces(type, namespaces);
+            lightload$namespaceIndex().put(type, namespaces);
             namespaces.forEach(namespace -> lightload$schedulePathScan(cache, type, namespace));
         }
     }
@@ -119,17 +148,33 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
                                                 PackResources.ResourceOutput output, CallbackInfo ci) {
         ResourceIndexCache cache = StartupCoordinator.cache();
         if (cache == null || !cache.pathIndexEnabled() || FusionPackCompat.hasOverrides(this)) return;
-        Optional<List<String>> cached = cache.findResourcePaths(lightload$self(), type, namespace);
-        if (cached.isEmpty()) {
-            lightload$schedulePathScan(cache, type, namespace);
-            return;
+        ResourceIndexCache.PackView view = lightload$view(cache);
+        if (view == null) return;
+        String indexKey = type.name() + '|' + namespace;
+        List<String> indexed = lightload$resourcePathIndex().get(indexKey);
+        if (indexed == null) {
+            Optional<List<String>> cached = view.findResourcePaths(type, namespace);
+            if (cached.isEmpty()) {
+                lightload$schedulePathScan(cache, type, namespace);
+                return;
+            }
+            indexed = cached.get();
+            lightload$resourcePathIndex().put(indexKey, indexed);
         }
 
         String requested = path.isEmpty() ? "" : path.endsWith("/") ? path : path + "/";
-        for (String relative : cached.get()) {
-            if (!relative.startsWith(requested)) continue;
+        int first = requested.isEmpty() ? 0 : SortedStringLookup.lowerBound(indexed, requested);
+        for (int index = first; index < indexed.size(); index++) {
+            String relative = indexed.get(index);
+            if (!relative.startsWith(requested)) {
+                if (!requested.isEmpty()) break;
+                continue;
+            }
             ResourceLocation location = ResourceLocation.tryBuild(namespace, relative);
-            if (location != null) output.accept(location, lightload$openResource(type, location));
+            if (location != null) {
+                IoSupplier<InputStream> resource = lightload$openResource(type, location);
+                output.accept(location, view.wrapContent(type, location, resource));
+            }
         }
         ci.cancel();
     }
@@ -141,7 +186,8 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         cache.scanAsync(() -> {
             Path root = resolve(type.getDirectory(), namespace);
             List<String> paths = lightload$scanPaths(root);
-            if (paths != null) cache.recordResourcePaths(lightload$self(), type, namespace, paths);
+            ResourceIndexCache.PackView view = lightload$view(cache);
+            if (paths != null && view != null) view.recordResourcePaths(type, namespace, paths);
         });
     }
 
@@ -166,8 +212,9 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
                                         CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
         ResourceIndexCache cache = StartupCoordinator.cache();
         if (!StartupCoordinator.optimizationsActive() || cache == null) return;
-        Optional<Boolean> exists = cache.packExistenceCacheEnabled()
-                ? cache.findCachedExistence(lightload$self(), type, location)
+        ResourceIndexCache.PackView view = lightload$view(cache);
+        Optional<Boolean> exists = cache.packExistenceCacheEnabled() && view != null
+                ? view.findExistence(type, location)
                 : Optional.empty();
         if (exists.isPresent() && !exists.get()) {
             cir.setReturnValue(null);
@@ -190,8 +237,9 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         ResourceIndexCache cache = StartupCoordinator.cache();
         if (StartupCoordinator.optimizationsActive() && cache != null) {
             IoSupplier<InputStream> original = cir.getReturnValue();
-            if (cache.packExistenceCacheEnabled()) {
-                cache.recordExistence(lightload$self(), type, location, original != null);
+            ResourceIndexCache.PackView view = lightload$view(cache);
+            if (cache.packExistenceCacheEnabled() && view != null) {
+                view.recordExistence(type, location, original != null);
             }
             if (original != null && !FusionPackCompat.hasOverrides(this)) {
                 cir.setReturnValue(cache.wrapContent(lightload$self(), type, location, original));
@@ -206,7 +254,9 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
         ResourceIndexCache cache = StartupCoordinator.cache();
         if (!StartupCoordinator.optimizationsActive() || cache == null) return;
         if (!cache.packExistenceCacheEnabled()) return;
-        Optional<Boolean> exists = cache.findCachedRootExistence(lightload$self(), paths);
+        ResourceIndexCache.PackView view = lightload$view(cache);
+        if (view == null) return;
+        Optional<Boolean> exists = view.findRootExistence(paths);
         if (exists.isEmpty()) return;
         cir.setReturnValue(exists.get() ? lightload$openRootResource(Arrays.copyOf(paths, paths.length)) : null);
     }
@@ -216,7 +266,8 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
                                               CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
         ResourceIndexCache cache = StartupCoordinator.cache();
         if (StartupCoordinator.optimizationsActive() && cache != null && cache.packExistenceCacheEnabled()) {
-            cache.recordRootExistence(lightload$self(), paths, cir.getReturnValue() != null);
+            ResourceIndexCache.PackView view = lightload$view(cache);
+            if (view != null) view.recordRootExistence(paths, cir.getReturnValue() != null);
         }
     }
 
@@ -263,6 +314,38 @@ public abstract class PathPackResourcesMixin implements ModFileBackedResourcePac
                 lightload$scheduledPathScans = ConcurrentHashMap.newKeySet();
             }
             return lightload$scheduledPathScans;
+        }
+    }
+
+    @Unique
+    private Map<PackType, Set<String>> lightload$namespaceIndex() {
+        Map<PackType, Set<String>> index = lightload$namespaceIndex;
+        if (index != null) return index;
+        synchronized (this) {
+            if (lightload$namespaceIndex == null) lightload$namespaceIndex = new ConcurrentHashMap<>();
+            return lightload$namespaceIndex;
+        }
+    }
+
+    @Unique
+    private Map<String, List<String>> lightload$resourcePathIndex() {
+        Map<String, List<String>> index = lightload$resourcePathIndex;
+        if (index != null) return index;
+        synchronized (this) {
+            if (lightload$resourcePathIndex == null) lightload$resourcePathIndex = new ConcurrentHashMap<>();
+            return lightload$resourcePathIndex;
+        }
+    }
+
+    @Unique
+    private ResourceIndexCache.PackView lightload$view(ResourceIndexCache cache) {
+        if (lightload$packViewResolved) return lightload$packView;
+        synchronized (this) {
+            if (!lightload$packViewResolved) {
+                lightload$packView = cache.packView(lightload$self());
+                lightload$packViewResolved = true;
+            }
+            return lightload$packView;
         }
     }
 

@@ -47,20 +47,9 @@ public final class LazyModelLocationSet extends AbstractSet<ResourceLocation> {
         return Collections.unmodifiableSet(result);
     }
 
-    @Override
-    public synchronized Iterator<ResourceLocation> iterator() {
-        generate(allNamespaces);
-        return Collections.unmodifiableSet(locations).iterator();
-    }
-
-    @Override
-    public synchronized int size() {
-        generate(allNamespaces);
-        return locations.size();
-    }
-
-    @Override
-    public synchronized boolean contains(Object value) {
+    @Override public synchronized Iterator<ResourceLocation> iterator() { generate(allNamespaces); return Collections.unmodifiableSet(locations).iterator(); }
+    @Override public synchronized int size() { generate(allNamespaces); return locations.size(); }
+    @Override public synchronized boolean contains(Object value) {
         if (!(value instanceof ResourceLocation location)) return false;
         generate(Set.of(location.getNamespace()));
         return locations.contains(location);
@@ -73,22 +62,15 @@ public final class LazyModelLocationSet extends AbstractSet<ResourceLocation> {
         BuiltInRegistries.BLOCK.entrySet().forEach(entry -> {
             ResourceLocation blockId = entry.getKey().location();
             if (!missing.contains(blockId.getNamespace())) return;
-            entry.getValue().getStateDefinition().getPossibleStates().forEach(state ->
-                    addGenerated(BlockModelShaper.stateToModelLocation(state)));
+            entry.getValue().getStateDefinition().getPossibleStates().forEach(state -> addGenerated(BlockModelShaper.stateToModelLocation(state)));
         });
-        BuiltInRegistries.ITEM.keySet().forEach(key -> {
-            ResourceLocation itemId = key;
-            if (missing.contains(itemId.getNamespace())) {
-                addGenerated(new ModelResourceLocation(itemId, "inventory"));
-            }
+        BuiltInRegistries.ITEM.keySet().forEach(itemId -> {
+            if (missing.contains(itemId.getNamespace())) addGenerated(new ModelResourceLocation(itemId, "inventory"));
         });
         generatedNamespaces.addAll(missing);
     }
 
-    private void addGenerated(ResourceLocation location) {
-        if (locations.add(location)) remember(location);
-    }
-
+    private void addGenerated(ResourceLocation location) { if (locations.add(location)) remember(location); }
     private void remember(ResourceLocation location) {
         allNamespaces.add(location.getNamespace());
         byNamespace.computeIfAbsent(location.getNamespace(), ignored -> new LinkedHashSet<>()).add(location);

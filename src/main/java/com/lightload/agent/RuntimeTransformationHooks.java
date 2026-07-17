@@ -2,10 +2,20 @@ package com.lightload.agent;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Field;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.lang.module.ModuleReader;
+import java.lang.module.ModuleReference;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -21,12 +31,16 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /** Bootstrap-visible exact index for Forge access-transformer targets. */
 public final class RuntimeTransformationHooks {
     private static final boolean[] OCULUS_PATH_CHARS = createOculusPathChars();
     private static final Map<Map<?, ?>, Index> INDEXES = Collections.synchronizedMap(new IdentityHashMap<>());
     private static final Map<List<?>, MixinConfigIndex> MIXIN_CONFIG_INDEXES =
+            Collections.synchronizedMap(new IdentityHashMap<>());
+    private static final Map<Set<?>, ObjectHolderIndex> OBJECT_HOLDER_INDEXES =
             Collections.synchronizedMap(new IdentityHashMap<>());
     private static final AtomicBoolean MIXIN_INDEX_FAILURE_REPORTED = new AtomicBoolean();
     private static final Map<String, Set<String>> MODULE_PACKAGES = new ConcurrentHashMap<>();
@@ -42,11 +56,13 @@ public final class RuntimeTransformationHooks {
     });
     private static volatile Path modulePackageIndexPath;
     private static volatile ScheduledFuture<?> modulePackageWrite;
+    private static volatile Path classByteArchivePath;
+    private static volatile ClassByteArchive classByteArchive;
     private static volatile boolean invoked;
     private static volatile boolean fallbackReported;
-    private static final ClassValue<Map<String, Map<Integer, String>>> OPCODE_NAMES = new ClassValue<>() {
+    private static final ClassValue<Map<String, String[]>> OPCODE_NAMES = new ClassValue<>() {
         @Override
-        protected Map<String, Map<Integer, String>> computeValue(Class<?> type) {
+        protected Map<String, String[]> computeValue(Class<?> type) {
             return new ConcurrentHashMap<>();
         }
     };
@@ -87,6 +103,132 @@ public final class RuntimeTransformationHooks {
     };
 
     private RuntimeTransformationHooks() {
+    }
+
+    public static byte[] readClassBytes(ModuleReader reader, ModuleReference reference, String className) {
+        ClassByteArchive archive = classByteArchive;
+        if (archive != null) {
+            byte[] cached = archive.cached(reference, className);
+            if (cached != null) return cached;
+        }
+        String resource = className.replace('.', '/') + ".class";
+        try {
+            java.util.Optional<InputStream> opened = reader.open(resource);
+            if (opened.isEmpty()) {
+                byte[] missing = new byte[0];
+                if (archive != null) archive.record(reference, className, missing);
+                return missing;
+            }
+            try (InputStream input = opened.get()) {
+                byte[] bytes = input.readAllBytes();
+                if (archive != null) archive.record(reference, className, bytes);
+                return bytes;
+            }
+        } catch (IOException exception) {
+            throw new UncheckedIOException(exception);
+        }
+    }
+
+    public static void configureClassByteCache(Path path) {
+        classByteArchivePath = path;
+        System.setProperty("lightload.runtimePatch.classArchive", "waiting-fingerprint");
+    }
+
+    public static void activateClassByteCache(String targetFingerprint, List<ParentFingerprint> parents) {
+        Path path = classByteArchivePath;
+        if (path == null || classByteArchive != null) return;
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            updateDigest(digest, targetFingerprint);
+            for (ParentFingerprint parent : parents) {
+                updateDigest(digest, parent.path());
+                updateDigest(digest, Long.toString(parent.size()));
+                updateDigest(digest, Long.toString(parent.modifiedMillis()));
+            }
+            classByteArchive = ClassByteArchive.open(path, HexFormat.of().formatHex(digest.digest()));
+        } catch (Throwable throwable) {
+            System.setProperty("lightload.runtimePatch.classArchive", "activation-failed");
+            System.setProperty("lightload.runtimePatch.classArchiveDetail", throwable.toString());
+        }
+    }
+
+    /** Activates the same archive for dynamic attach without requiring a premain fingerprint hook. */
+    public static void activateRuntimeClassByteCache(Path gameDirectory) {
+        Path path = classByteArchivePath;
+        if (path == null || classByteArchive != null) return;
+        try {
+            String fingerprint = runtimeClassByteFingerprint(
+                    gameDirectory, System.getProperty("java.class.path", ""));
+            classByteArchive = ClassByteArchive.open(path, fingerprint);
+        } catch (Throwable throwable) {
+            System.setProperty("lightload.runtimePatch.classArchive", "activation-failed");
+            System.setProperty("lightload.runtimePatch.classArchiveDetail", throwable.toString());
+        }
+    }
+
+    static String runtimeClassByteFingerprint(Path gameDirectory, String classPath) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        updateDigest(digest, "lightload-runtime-classpath-v1");
+        updateDigest(digest, System.getProperty("java.runtime.version", "unknown"));
+
+        List<Path> roots = new ArrayList<>();
+        if (classPath != null && !classPath.isBlank()) {
+            for (String entry : classPath.split(java.util.regex.Pattern.quote(
+                    System.getProperty("path.separator")))) {
+                if (!entry.isBlank()) roots.add(Path.of(entry));
+            }
+        }
+        Path mods = gameDirectory == null ? null : gameDirectory.resolve("mods");
+        if (mods != null && Files.isDirectory(mods)) roots.add(mods);
+        roots.sort(Comparator.comparing(path -> path.toAbsolutePath().normalize().toString()));
+        for (Path root : roots) updatePathDigest(digest, root);
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static void updatePathDigest(MessageDigest digest, Path root) throws IOException {
+        Path normalized = root.toAbsolutePath().normalize();
+        updateDigest(digest, normalized.toString());
+        if (!Files.exists(normalized)) {
+            updateDigest(digest, "missing");
+            return;
+        }
+        if (Files.isRegularFile(normalized)) {
+            updateFileDigest(digest, normalized, normalized.getFileName().toString());
+            return;
+        }
+        if (!Files.isDirectory(normalized)) {
+            updateDigest(digest, "unsupported");
+            return;
+        }
+        try (var files = Files.walk(normalized)) {
+            List<Path> entries = files.filter(Files::isRegularFile)
+                    .sorted(Comparator.comparing(path -> normalized.relativize(path).toString()))
+                    .toList();
+            updateDigest(digest, Integer.toString(entries.size()));
+            for (Path entry : entries) {
+                updateFileDigest(digest, entry, normalized.relativize(entry).toString());
+            }
+        }
+    }
+
+    private static void updateFileDigest(MessageDigest digest, Path file, String identity) throws IOException {
+        updateDigest(digest, identity);
+        updateDigest(digest, Long.toString(Files.size(file)));
+        updateDigest(digest, Long.toString(Files.getLastModifiedTime(file).toMillis()));
+    }
+
+    public static void finishClassByteCache() {
+        ClassByteArchive archive = classByteArchive;
+        if (archive != null) archive.finish();
+    }
+
+    private static void updateDigest(MessageDigest digest, String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        digest.update((byte) (bytes.length >>> 24));
+        digest.update((byte) (bytes.length >>> 16));
+        digest.update((byte) (bytes.length >>> 8));
+        digest.update((byte) bytes.length);
+        digest.update(bytes);
     }
 
     public static void configureModulePackageCache(Path path) {
@@ -239,9 +381,9 @@ public final class RuntimeTransformationHooks {
     public static String opcodeName(Class<?> constants, int opcode, String start, int minimum) {
         if (opcode >= minimum) {
             try {
-                String name = OPCODE_NAMES.get(constants)
-                        .computeIfAbsent(start, ignored -> collectIntegerConstants(constants, start))
-                        .get(opcode);
+                String[] names = OPCODE_NAMES.get(constants)
+                        .computeIfAbsent(start, ignored -> collectIntegerConstants(constants, start));
+                String name = opcode < names.length ? names[opcode] : null;
                 if (name != null) return name;
             } catch (Throwable ignored) {
             }
@@ -267,6 +409,131 @@ public final class RuntimeTransformationHooks {
             reportMixinIndexFailure(throwable);
             return configs.iterator();
         }
+    }
+
+    public static void applyIndexedObjectHolders(Set<?> handlers, Predicate<?> filter) {
+        Object registry = predicateRegistry(filter);
+        if (registry == null) {
+            applyObjectHolderHandlers(handlers, filter);
+            return;
+        }
+        Iterable<?> work;
+        try {
+            ObjectHolderIndex index = objectHolderIndex(handlers);
+            List<Object> selected = index.byRegistry().get(registry);
+            int selectedSize = selected == null ? 0 : selected.size();
+            List<Object> candidates = new ArrayList<>(selectedSize + index.generic().size());
+            if (selected != null) candidates.addAll(selected);
+            candidates.addAll(index.generic());
+            work = candidates;
+            System.setProperty("lightload.runtimePatch.objectHolders", "indexed");
+            System.setProperty("lightload.runtimePatch.objectHolderCandidates", Integer.toString(candidates.size()));
+            System.setProperty("lightload.runtimePatch.objectHolderTotal", Integer.toString(handlers.size()));
+        } catch (Throwable throwable) {
+            System.setProperty("lightload.runtimePatch.objectHolders", "fallback");
+            work = handlers;
+        }
+        applyObjectHolderHandlers(work, filter);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static void applyObjectHolderHandlers(Iterable<?> handlers, Predicate<?> filter) {
+        RuntimeException aggregate = new RuntimeException(
+                "Failed to apply some object holders, see suppressed exceptions for details");
+        for (Object handler : handlers) {
+            try {
+                ((Consumer) handler).accept(filter);
+            } catch (Exception exception) {
+                aggregate.addSuppressed(exception);
+            }
+        }
+        if (aggregate.getSuppressed().length > 0) throw aggregate;
+    }
+
+    private static ObjectHolderIndex objectHolderIndex(Set<?> handlers) {
+        synchronized (OBJECT_HOLDER_INDEXES) {
+            ObjectHolderIndex existing = OBJECT_HOLDER_INDEXES.get(handlers);
+            if (existing != null && existing.sourceSize() == handlers.size()) return existing;
+            Map<Object, List<Object>> byRegistry = new HashMap<>();
+            List<Object> generic = new ArrayList<>();
+            for (Object handler : handlers) {
+                Object registry = handlerRegistry(handler);
+                if (registry == null) generic.add(handler);
+                else byRegistry.computeIfAbsent(registry, ignored -> new ArrayList<>()).add(handler);
+            }
+            Map<Object, List<Object>> immutable = new HashMap<>(byRegistry.size());
+            byRegistry.forEach((registry, values) -> immutable.put(registry, List.copyOf(values)));
+            ObjectHolderIndex created = new ObjectHolderIndex(handlers.size(), Map.copyOf(immutable), List.copyOf(generic));
+            OBJECT_HOLDER_INDEXES.put(handlers, created);
+            System.setProperty("lightload.runtimePatch.objectHolderIndexed",
+                    Integer.toString(handlers.size() - generic.size()));
+            System.setProperty("lightload.runtimePatch.objectHolderGeneric", Integer.toString(generic.size()));
+            return created;
+        }
+    }
+
+    private static Object predicateRegistry(Predicate<?> predicate) {
+        String name = predicate.getClass().getName();
+        if (!name.startsWith("net.minecraftforge.registries.GameData$$Lambda")) return null;
+        return capturedResourceLocation(predicate, false);
+    }
+
+    private static Object handlerRegistry(Object handler) {
+        String name = handler.getClass().getName();
+        if (name.equals("net.minecraftforge.registries.ObjectHolderRef")) {
+            Object registry = declaredFieldValue(handler, "registry");
+            return registry == null ? null : registryName(registry);
+        }
+        if (name.equals("net.minecraftforge.registries.RegistryObject$1")) {
+            Object registryName = declaredFieldValue(handler, "val$registryName");
+            return isResourceLocation(registryName) ? registryName : null;
+        }
+        if (name.startsWith("net.minecraftforge.registries.RegistryObject$$Lambda")) {
+            return capturedResourceLocation(handler, true);
+        }
+        return null;
+    }
+
+    private static Object capturedResourceLocation(Object owner, boolean resolveRegistry) {
+        for (Class<?> type = owner.getClass(); type != null; type = type.getSuperclass()) {
+            for (Field field : type.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers()) || !field.trySetAccessible()) continue;
+                try {
+                    Object value = field.get(owner);
+                    if (isResourceLocation(value)) return value;
+                    if (resolveRegistry && value != null) {
+                        Object registry = registryName(value);
+                        if (registry != null) return registry;
+                    }
+                } catch (IllegalAccessException ignored) {
+                }
+            }
+        }
+        return null;
+    }
+
+    private static Object declaredFieldValue(Object owner, String name) {
+        try {
+            Field field = owner.getClass().getDeclaredField(name);
+            if (!field.trySetAccessible()) return null;
+            return field.get(owner);
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
+    }
+
+    private static Object registryName(Object registry) {
+        try {
+            Method method = inheritedPublicMethod(registry.getClass(), "getRegistryName", 0);
+            Object value = method.invoke(registry);
+            return isResourceLocation(value) ? value : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static boolean isResourceLocation(Object value) {
+        return value != null && value.getClass().getName().equals("net.minecraft.resources.ResourceLocation");
     }
 
     private static Index index(Map<?, ?> accessTransformers) throws Exception {
@@ -443,7 +710,7 @@ public final class RuntimeTransformationHooks {
                 + (throwable.getMessage() == null ? "" : ": " + throwable.getMessage()));
     }
 
-    private static Map<Integer, String> collectIntegerConstants(Class<?> constants, String start) {
+    private static String[] collectIntegerConstants(Class<?> constants, String start) {
         Map<Integer, String> names = new HashMap<>();
         boolean collecting = false;
         try {
@@ -455,7 +722,12 @@ public final class RuntimeTransformationHooks {
         } catch (ReflectiveOperationException exception) {
             throw new IllegalStateException(exception);
         }
-        return Map.copyOf(names);
+        int maximum = names.keySet().stream().mapToInt(Integer::intValue).max().orElse(-1);
+        String[] indexed = new String[Math.max(0, maximum + 1)];
+        names.forEach((opcode, name) -> {
+            if (opcode >= 0) indexed[opcode] = name;
+        });
+        return indexed;
     }
 
     private static Method accessibleMethod(Class<?> type, String name) {
@@ -488,6 +760,9 @@ public final class RuntimeTransformationHooks {
     }
 
     private record ModuleMetadataMethods(Method name, Method version) {
+    }
+
+    private record ObjectHolderIndex(int sourceSize, Map<Object, List<Object>> byRegistry, List<Object> generic) {
     }
 
     private record MixinConfigIndex(int sourceSize, Object first, Object last,

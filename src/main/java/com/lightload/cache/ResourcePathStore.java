@@ -53,7 +53,7 @@ final class ResourcePathStore {
                 result.put(key, List.copyOf(paths));
             }
             if (input.read() != -1) throw new IOException("Trailing path cache data");
-            return Optional.of(new PersistedPaths(fingerprint, Map.copyOf(result)));
+            return Optional.of(new PersistedPaths(fingerprint, java.util.Collections.unmodifiableMap(result)));
         } catch (EOFException exception) {
             throw new IOException("Truncated path cache", exception);
         }

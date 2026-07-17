@@ -1,6 +1,5 @@
 package com.lightload.mixin;
 
-import com.lightload.bootstrap.RuntimeAgentBootstrap;
 import com.lightload.core.CompatibilityManager;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
@@ -37,14 +36,9 @@ public final class LightloadMixinPlugin implements IMixinConfigPlugin {
     private static final String WATERMEDIA_HTTP_CLIENT_MIXIN =
             "com.lightload.mixin.compat.WaterMediaHttpClientMixin";
     private static final Set<String> MODERNFIX_OVERLAPS = Set.of(
-            "com.lightload.mixin.client.MinecraftReloadExecutorMixin",
-            "com.lightload.mixin.client.BlockEntityTypeMixin",
             "com.lightload.mixin.client.BlockStateBaseCacheMixin",
-            "com.lightload.mixin.client.DataFixersMixin",
-            "com.lightload.mixin.client.EntityTypeBuilderMixin",
             "com.lightload.mixin.client.GameDataBlockCallbacksMixin",
-            "com.lightload.mixin.client.LdlibMetadataCacheMixin",
-            "com.lightload.mixin.client.StitcherMixin"
+            "com.lightload.mixin.client.LdlibMetadataCacheMixin"
     );
     private static final Set<String> DERIVED_MODEL_CACHES = Set.of(
             "com.lightload.mixin.client.MaterialHashMixin",
@@ -69,7 +63,28 @@ public final class LightloadMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public void onLoad(String mixinPackage) {
-        RuntimeAgentBootstrap.install();
+        installRuntimeAgentFallback();
+        preloadForgeLazy();
+    }
+
+    private static void installRuntimeAgentFallback() {
+        if (Boolean.getBoolean("lightload.runtimeAgent.active") || Boolean.getBoolean("lightload.agent.active")) return;
+        try {
+            Class.forName("com.lightload.bootstrap.RuntimeAgentBootstrap", true,
+                            LightloadMixinPlugin.class.getClassLoader())
+                    .getMethod("install").invoke(null);
+        } catch (ReflectiveOperationException ignored) {
+        }
+    }
+
+    private static void preloadForgeLazy() {
+        try {
+            Class.forName("net.minecraftforge.common.util.Lazy", true,
+                    LightloadMixinPlugin.class.getClassLoader());
+            System.setProperty("lightload.compat.forgeLazy", "preloaded");
+        } catch (Throwable throwable) {
+            System.setProperty("lightload.compat.forgeLazy", "unavailable");
+        }
     }
 
     @Override

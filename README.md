@@ -13,7 +13,9 @@ Use a Java 17 or newer Gradle launcher. The project toolchain compiles the mod f
 .\gradlew.bat test build
 ```
 
-The reobfuscated mod jar is written to `build/libs/lightload-1.0.0.jar`.
+The reobfuscated single-file distribution is written to `build/libs/lightload-1.0.0.jar`. Install
+only this JAR in the `mods` directory. It contains an isolated early bootstrap and an embedded
+GAME-layer mod payload; no `-javaagent` or companion bootstrap JAR is required.
 
 ## Configuration
 
@@ -27,20 +29,17 @@ profiling=true
 showLoadingTime=true
 cacheResourceRoutes=true
 cacheResourceExistence=true
+maxExistenceCacheMiB=256
 cacheResourceContent=true
 maxContentCacheMiB=256
 maxCachedResourceKiB=1024
 parallelResourceLookup=true
-parallelLookupMinPacks=4
+parallelLookupMinPacks=16
 isolateModdedResourceReloadFailures=true
 isolatedResourceReloadListenerPatterns=*
 connectorCompatibilityMode=true
+lazyBlockStateCache=true
 aggressiveStartup=true
-dedicatedReloadExecutor=true
-reloadThreads=0
-lazyDataFixer=true
-progressiveModelWarmup=true
-fastTextureStitching=true
 earlyAgent=true
 parallelJarJarMetadata=true
 jarJarThreads=4
@@ -48,8 +47,8 @@ lightspeedModernFixInterop=true
 optimizationProfile=auto
 ```
 
-Cached indexes are stored under `cache/lightload`. Set `-Dlightload.disable=true` to disable all
-Mixins before they are applied. If a startup ends before Forge finishes loading, the next launch
+Cached indexes are stored under `cache/lightload`. Set `enabled=false` in the configuration to
+disable Lightload. If a startup ends before Forge finishes loading, the next launch
 automatically disables cache optimizations once and clears recovery mode after a successful load.
 
 Production mod jars are cached. Development directories, folder resource packs, nested paths that
@@ -66,6 +65,15 @@ the content cache stores only bounded text resources such as JSON, metadata, lan
 shaders. Every persistent entry is tied to the mod JAR fingerprint and stored in a checked binary
 format. When ModernFix is installed, Lightload avoids overlapping resource/model layers. When
 LightspeedRe is installed, duplicate Lightspeed-compatible mixins are skipped.
+
+Existence caches are enabled up to `maxExistenceCacheMiB`; large Forge packs such as ATM9 can
+disable this cache and use the much smaller route index instead when the existence shards grow too
+large.
+Parallel pack lookup runs in bounded waves so an early match does not schedule every later pack.
+The outer JAR is discovered in Forge's SERVICE layer, activates the early metadata optimization,
+and exposes its content-addressed embedded payload to Forge as a normal GAME-layer mod. Extracted
+payloads are verified and stored under `cache/lightload/bundle`; replacing the distribution creates
+a new payload automatically.
 
 The resource and model optimization behavior was independently adapted from the LGPL-3.0
 Lightspeed project by CCr4ft3r, with additional cache validation, invalidation, and compatibility

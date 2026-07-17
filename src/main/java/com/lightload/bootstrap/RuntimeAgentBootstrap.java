@@ -22,6 +22,14 @@ public final class RuntimeAgentBootstrap {
     }
 
     public static void install() {
+        install("runtime");
+    }
+
+    public static void installEarly() {
+        install("early");
+    }
+
+    private static void install(String mode) {
         if (!STARTED.compareAndSet(false, true) || Boolean.getBoolean("lightload.disable")
                 || Boolean.getBoolean("lightload.runtimeAgent.disable")
                 || Boolean.getBoolean("lightload.agent.active")) return;
@@ -40,7 +48,7 @@ public final class RuntimeAgentBootstrap {
                     System.getProperty("os.name", "").startsWith("Windows") ? "java.exe" : "java");
             if (!Files.isRegularFile(java)) return;
 
-            String options = "mode=runtime;gameDir64=" + encodeOption(gameDirectory)
+            String options = "mode=" + mode + ";gameDir64=" + encodeOption(gameDirectory)
                     + ";agentJar64=" + encodeOption(agentJar);
             Process process = new ProcessBuilder(
                     java.toString(), "--add-modules", "jdk.attach", "-cp", agentJar.toString(),
@@ -120,7 +128,10 @@ public final class RuntimeAgentBootstrap {
         if (!Files.isDirectory(mods)) return null;
         try (var files = Files.list(mods)) {
             return files.filter(Files::isRegularFile)
-                    .filter(path -> path.getFileName().toString().toLowerCase(java.util.Locale.ROOT).contains("lightload"))
+                    .filter(path -> {
+                        String name = path.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+                        return name.contains("lightload") && name.endsWith(".jar");
+                    })
                     .filter(RuntimeAgentBootstrap::isAgentJar)
                     .findFirst().orElse(null);
         } catch (Exception ignored) {
@@ -140,7 +151,7 @@ public final class RuntimeAgentBootstrap {
         }
     }
 
-    private static Path resolveGameDirectory() {
+    static Path resolveGameDirectory() {
         Path workingDirectory = Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize();
         if (Files.isDirectory(workingDirectory.resolve("mods"))) return workingDirectory;
         String command = System.getProperty("sun.java.command", "");

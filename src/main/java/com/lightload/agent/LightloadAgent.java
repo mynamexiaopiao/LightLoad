@@ -67,16 +67,28 @@ public final class LightloadAgent {
         String stage = "resolve-game-directory";
         try {
             Path gameDirectory = resolveGameDirectory(arguments);
+            System.setProperty("lightload.agent.gameDir", gameDirectory.toString());
             Properties config = loadConfig(gameDirectory.resolve("config").resolve("lightload.properties"));
             configureRuntimeFlags(config);
+            boolean early = "early".equalsIgnoreCase(option(arguments, "mode"));
             stage = "create-cache-directory";
             Path cacheDirectory = gameDirectory.resolve("cache").resolve("lightload").resolve("early");
             Files.createDirectories(cacheDirectory);
             stage = "install-bootstrap-hooks";
             installBootstrapHooks(instrumentation, arguments, cacheDirectory);
+            if (early) {
+                stage = "install-early-jar-in-jar-cache";
+                installEarlyJarInJarCache(instrumentation, cacheDirectory, config);
+            } else {
+                stage = "activate-runtime-class-cache";
+                Class.forName("com.lightload.agent.RuntimeTransformationHooks", true, null)
+                        .getMethod("activateRuntimeClassByteCache", Path.class)
+                        .invoke(null, gameDirectory);
+            }
             stage = "install-runtime-patches";
             installRuntimePatches(instrumentation);
             System.setProperty("lightload.runtimeAgent.active", "true");
+            if (early) System.setProperty("lightload.agent.active", "true");
             System.clearProperty("lightload.runtimeAgent.detail");
             System.clearProperty("lightload.runtimeAgent.stage");
             System.out.println("[Lightload Agent] Runtime Forge transformer optimization active");
@@ -87,6 +99,24 @@ public final class LightloadAgent {
             System.err.println("[Lightload Agent] Runtime initialization failed; Forge will continue normally: "
                     + describe(throwable));
         }
+    }
+
+    private static void installEarlyJarInJarCache(Instrumentation instrumentation, Path cacheDirectory,
+                                                   Properties config) throws Exception {
+        int threads = parseThreads(config.getProperty("jarJarThreads", "4"));
+        boolean parallel = Boolean.parseBoolean(config.getProperty("parallelJarJarMetadata", "true"));
+        invokeBootstrap("configure", new Class[]{Path.class, int.class, boolean.class},
+                cacheDirectory.resolve("jij-index-v1.bin"), threads, parallel);
+        JarInJarTransformer transformer = new JarInJarTransformer(instrumentation);
+        instrumentation.addTransformer(transformer, true);
+        for (Class<?> loaded : instrumentation.getAllLoadedClasses()) {
+            if (loaded.getName().equals("net.minecraftforge.fml.loading.moddiscovery.JarInJarDependencyLocator")
+                    && instrumentation.isModifiableClass(loaded)) {
+                instrumentation.retransformClasses(loaded);
+                break;
+            }
+        }
+        System.setProperty("lightload.agent.cache", "waiting");
     }
 
     private static String describe(Throwable throwable) {
@@ -155,6 +185,8 @@ public final class LightloadAgent {
         Class<?> runtimeHooks = Class.forName("com.lightload.agent.RuntimeTransformationHooks", true, null);
         runtimeHooks.getMethod("configureModulePackageCache", Path.class)
                 .invoke(null, cacheDirectory.resolve("module-packages-v1.bin"));
+        runtimeHooks.getMethod("configureClassByteCache", Path.class)
+                .invoke(null, cacheDirectory.resolve("class-bytes-v1"));
     }
 
     private static void installRuntimePatches(Instrumentation instrumentation) throws Exception {
@@ -167,6 +199,8 @@ public final class LightloadAgent {
                     && !name.equals(RuntimePatchTransformer.MIXIN_PROCESSOR)
                     && !name.equals(RuntimePatchTransformer.RESOURCE_LOCATION)
                     && !name.equals(RuntimePatchTransformer.MOD_JAR_METADATA)
+                    && !name.equals(RuntimePatchTransformer.MODULE_CLASS_LOADER)
+                    && !name.equals(RuntimePatchTransformer.OBJECT_HOLDER_REGISTRY)
                     && !name.equals(RuntimePatchTransformer.JDK_MODULE_RESOLVER))
                     || !instrumentation.isModifiableClass(loaded)) continue;
             instrumentation.retransformClasses(loaded);
@@ -192,7 +226,8 @@ public final class LightloadAgent {
         Path temporary = target.resolveSibling(target.getFileName() + ".tmp");
         String[] prefixes = {
                 "com/lightload/agent/EarlyJarInJarHooks",
-                 "com/lightload/agent/RuntimeTransformationHooks",
+                "com/lightload/agent/RuntimeTransformationHooks",
+                "com/lightload/agent/ClassByteArchive",
                 "com/lightload/agent/ModulePackageIndexStore",
                 "com/lightload/agent/ParentFingerprint",
                 "com/lightload/agent/JarJarIndex",

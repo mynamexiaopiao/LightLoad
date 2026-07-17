@@ -11,14 +11,8 @@ import java.util.function.Predicate;
 
 public final class ModelVisibilityIndex {
     private static final Set<String> NAMESPACE_LOCAL_SCANNERS = Set.of(
-            "mekanism",
-            "elevatorid",
-            "dyenamicsandfriends",
-            "cfm",
-            "twilightforest",
-            "aether",
-            "industrialforegoing"
-    );
+            "mekanism", "elevatorid", "dyenamicsandfriends", "cfm", "twilightforest", "aether",
+            "industrialforegoing");
 
     private ModelVisibilityIndex() {
     }
