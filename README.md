@@ -68,7 +68,9 @@ replays them on later reloads and launches. Route and existence caches avoid los
 the content cache stores only bounded text resources such as JSON, metadata, language files, and
 shaders. Every persistent entry is tied to the mod JAR fingerprint and stored in a checked binary
 format. When ModernFix is installed, Lightload avoids overlapping resource/model layers. When
-LightspeedRe is installed, duplicate Lightspeed-compatible mixins are skipped.
+Forgified Fabric API is installed, Lightload preserves its identity-sensitive reload listener sorting
+while retaining the remaining startup and resource optimizations. When LightspeedRe is installed,
+duplicate Lightspeed-compatible mixins are skipped.
 
 The outer JAR is discovered through NeoForge's candidate-locator service, extracts its content-addressed
 GAME payload under `cache/lightload/bundle`, and attaches the optional runtime Agent early in loading.
