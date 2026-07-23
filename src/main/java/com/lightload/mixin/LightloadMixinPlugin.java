@@ -35,6 +35,8 @@ public final class LightloadMixinPlugin implements IMixinConfigPlugin {
             "com.lightload.mixin.compat.ProbeJsHttpClientMixin";
     private static final String WATERMEDIA_HTTP_CLIENT_MIXIN =
             "com.lightload.mixin.compat.WaterMediaHttpClientMixin";
+    private static final String RESOURCE_RELOAD_FAILURE_GUARD_MIXIN =
+            "com.lightload.mixin.client.SimpleReloadInstanceMixin";
     private static final Set<String> MODERNFIX_OVERLAPS = Set.of(
             "com.lightload.mixin.client.BlockStateBaseCacheMixin",
             "com.lightload.mixin.client.GameDataBlockCallbacksMixin",
@@ -124,6 +126,10 @@ public final class LightloadMixinPlugin implements IMixinConfigPlugin {
         }
         if (WATERMEDIA_HTTP_CLIENT_MIXIN.equals(mixinClassName)) {
             return CompatibilityManager.waterMediaYoutubePresent();
+        }
+        if (RESOURCE_RELOAD_FAILURE_GUARD_MIXIN.equals(mixinClassName)
+                && CompatibilityManager.fabricResourceLoaderPresent()) {
+            return false;
         }
         if (MODERNFIX_MODEL_EVENT_MIXIN.equals(mixinClassName)
                 || MODERNFIX_RESOURCE_NODE_MIXIN.equals(mixinClassName)) {

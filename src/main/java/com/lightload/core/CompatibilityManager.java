@@ -14,6 +14,7 @@ public final class CompatibilityManager {
     private static volatile Boolean travelersBackpackPresent;
     private static volatile Boolean probeJsPresent;
     private static volatile Boolean waterMediaYoutubePresent;
+    private static volatile Boolean fabricResourceLoaderPresent;
 
     private CompatibilityManager() {
     }
@@ -133,6 +134,17 @@ public final class CompatibilityManager {
         return isLoaded("connectormod") || isLoaded("connector");
     }
 
+    public static boolean fabricResourceLoaderPresent() {
+        Boolean cached = fabricResourceLoaderPresent;
+        if (cached != null) return cached;
+        if (isLoaded("fabric_resource_loader_v0") || isLoaded("forgified_fabric_api")
+                || isLoaded("fabric_api")) {
+            fabricResourceLoaderPresent = true;
+            return true;
+        }
+        return false;
+    }
+
     public static boolean resourcePathCompatibilityRiskPresent() {
         return connectorPresent() || (isLoaded("sophisticatedstorage") && isLoaded("jsonthings"));
     }
@@ -211,6 +223,10 @@ public final class CompatibilityManager {
 
     static void setWaterMediaYoutubePresentForTests(Boolean value) {
         waterMediaYoutubePresent = value;
+    }
+
+    static void setFabricResourceLoaderPresentForTests(Boolean value) {
+        fabricResourceLoaderPresent = value;
     }
 
     public enum OptimizationProfile {

@@ -64,7 +64,9 @@ replays them on later reloads and launches. Route and existence caches avoid los
 the content cache stores only bounded text resources such as JSON, metadata, language files, and
 shaders. Every persistent entry is tied to the mod JAR fingerprint and stored in a checked binary
 format. When ModernFix is installed, Lightload avoids overlapping resource/model layers. When
-LightspeedRe is installed, duplicate Lightspeed-compatible mixins are skipped.
+Forgified Fabric API is installed, Lightload preserves its identity-sensitive reload listener sorting
+while retaining the remaining startup and resource optimizations. When LightspeedRe is installed,
+duplicate Lightspeed-compatible mixins are skipped.
 
 Existence caches are enabled up to `maxExistenceCacheMiB`; large Forge packs such as ATM9 can
 disable this cache and use the much smaller route index instead when the existence shards grow too
