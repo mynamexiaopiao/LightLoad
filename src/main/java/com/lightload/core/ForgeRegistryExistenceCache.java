@@ -23,7 +23,9 @@ public final class ForgeRegistryExistenceCache {
         if (cached != null) return cached;
         boolean computed = StartupCoordinator.aggressiveOptimizationsEnabled()
                 && StartupCoordinator.config().forgeRegistryLookupCache();
-        enabled = computed;
+        // Registry callbacks may run before the CLIENT config has finished loading.
+        // Only freeze the result after StartupCoordinator has a real config snapshot.
+        if (StartupCoordinator.initialized()) enabled = computed;
         return computed;
     }
 

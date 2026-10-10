@@ -55,7 +55,7 @@
   "lightload.configuration.resources.isolateModdedResourceReloadFailures": "Isolate Mod Reload Failures",
   "lightload.configuration.resources.isolateModdedResourceReloadFailures.tooltip": "Prevent selected optional mod reload listeners from aborting the entire reload.",
   "lightload.configuration.resources.isolatedResourceReloadListenerPatterns": "Isolated Listener Patterns",
-  "lightload.configuration.resources.isolatedResourceReloadListenerPatterns.tooltip": "Comma-separated listener class patterns. An asterisk matches all optional mod listeners.",
+  "lightload.configuration.resources.isolatedResourceReloadListenerPatterns.tooltip": "Comma-separated listener class patterns. Leave empty to keep failure isolation disabled.",
 
   "lightload.configuration.startup.lazyDataFixer": "Lazy DataFixer",
   "lightload.configuration.startup.lazyDataFixer.tooltip": "Requested lazy DataFixer initialization. This optimization is unavailable on Minecraft 1.21.1 and remains safely disabled.",

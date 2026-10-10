@@ -2,6 +2,7 @@ package com.lightload.core;
 
 import com.lightload.LightloadMod;
 import com.lightload.cache.ResourceIndexCache;
+import com.lightload.cache.ZipResourceIndexStore;
 import com.lightload.config.LightloadConfig;
 import net.neoforged.fml.loading.FMLPaths;
 
@@ -27,6 +28,7 @@ public final class StartupCoordinator {
     private static volatile ResourceIndexCache cache;
     private static volatile Path startupLock;
     private static volatile Path warmupLock;
+    private static volatile Path cacheDirectory;
     private static volatile boolean recoveryMode;
     private static volatile boolean aggressiveRecoveryMode;
     private static volatile boolean optimizationsActive;
@@ -42,6 +44,7 @@ public final class StartupCoordinator {
         if (!INITIALIZED.compareAndSet(false, true)) return;
         Path gameDirectory = FMLPaths.GAMEDIR.get();
         Path cacheDirectory = gameDirectory.resolve("cache").resolve("lightload");
+        StartupCoordinator.cacheDirectory = cacheDirectory;
         startupLock = cacheDirectory.resolve("startup.lock");
         warmupLock = cacheDirectory.resolve("warmup.lock");
         config = LightloadConfig.current();
@@ -95,9 +98,17 @@ public final class StartupCoordinator {
         return optimizationsActive;
     }
 
+    public static boolean initialized() {
+        return INITIALIZED.get();
+    }
+
     public static ResourceIndexCache cache() {
         if (!INITIALIZED.get()) initialize();
         return cache;
+    }
+
+    public static Path cacheDirectory() {
+        return cacheDirectory;
     }
 
     public static boolean shouldShowLoadingTime() {
@@ -168,6 +179,7 @@ public final class StartupCoordinator {
         }
         ResourceIndexCache currentCache = cache;
         if (currentCache != null) currentCache.persistAsync();
+        ZipResourceIndexStore.persistAsync(cacheDirectory);
         finishEarlyAgentClassCache();
         try {
             if (startupLock != null) Files.deleteIfExists(startupLock);
@@ -293,7 +305,7 @@ public final class StartupCoordinator {
                 stats.routeDiskBytes() / 1024,
                 stats.pathIndexHits(), stats.pathIndexMisses(), stats.asyncScans(),
                 aggressiveOptimizationsEnabled(),
-                config.dedicatedReloadExecutor(), config.lazyDataFixer(), config.fastTextureStitching(),
+                config.dedicatedReloadExecutor(), LazyDataFixerManager.enabled(), config.fastTextureStitching(),
                 CompatibilityManager.modernFixPresent(), CompatibilityManager.optimizationProfile(config), recoveryMode,
                 Boolean.getBoolean("lightload.agent.active"), System.getProperty("lightload.agent.cache", "inactive"),
                 System.getProperty("lightload.agent.cache.reason", "none"),

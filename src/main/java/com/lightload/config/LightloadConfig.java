@@ -69,30 +69,30 @@ public record LightloadConfig(
     private static LightloadConfig defaults() {
         return new LightloadConfig(
                 true, true, true, true, true, true, true, 0,
-                true, true, true, true, true, true, true, true, true,
+                false, true, true, true, true, true, true, true, true,
                 false, true, 256L * 1024 * 1024, false, 256L * 1024 * 1024, 1024 * 1024,
-                true, 16, true, "*", true, "auto", true);
+                true, 16, true, "", true, "auto", true);
     }
 
     public LightloadConfig(boolean enabled, boolean memoryCache, boolean persistentCache,
                            boolean profiling, long ignoredCacheLimit) {
         this(enabled, memoryCache, persistentCache, profiling, true, true, true, 0,
-                true, true, true, true, true, true, true, true, true, true, true,
-                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024, true, 16, true, "*", true, "auto", true);
+                false, true, true, true, true, true, true, true, true, true, true,
+                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024, true, 16, true, "", true, "auto", true);
     }
 
     public LightloadConfig(boolean enabled, boolean memoryCache, boolean persistentCache,
                            boolean profiling, long ignoredCacheLimit, boolean cacheResourceExistence) {
         this(enabled, memoryCache, persistentCache, profiling, true, true, true, 0,
-                true, true, true, true, true, true, true, false, true, false, cacheResourceExistence,
-                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024, true, 16, true, "*", true, "auto", true);
+                false, true, true, true, true, true, true, false, true, false, cacheResourceExistence,
+                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024, true, 16, true, "", true, "auto", true);
     }
 
     public LightloadConfig(boolean enabled, boolean memoryCache, boolean persistentCache,
                            boolean profiling, boolean showLoadingTime, long ignoredCacheLimit) {
         this(enabled, memoryCache, persistentCache, profiling, showLoadingTime, true, true, 0,
-                true, true, true, true, true, true, true, true, true, true, true,
-                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024, true, 16, true, "*", true, "auto", true);
+                false, true, true, true, true, true, true, true, true, true, true,
+                256L * 1024 * 1024, true, 256L * 1024 * 1024, 1024 * 1024, true, 16, true, "", true, "auto", true);
     }
 
     private static String profile(String value) {
@@ -165,12 +165,12 @@ public record LightloadConfig(
             dedicatedReloadExecutor = builder.translation("lightload.configuration.resources.dedicatedReloadExecutor").define("dedicatedReloadExecutor", true);
             reloadThreads = builder.translation("lightload.configuration.resources.reloadThreads").defineInRange("reloadThreads", 0, 0, 64);
             isolateModdedResourceReloadFailures = builder.translation("lightload.configuration.resources.isolateModdedResourceReloadFailures").define("isolateModdedResourceReloadFailures", true);
-            isolatedResourceReloadListenerPatterns = builder.translation("lightload.configuration.resources.isolatedResourceReloadListenerPatterns").define("isolatedResourceReloadListenerPatterns", "*");
+            isolatedResourceReloadListenerPatterns = builder.translation("lightload.configuration.resources.isolatedResourceReloadListenerPatterns").define("isolatedResourceReloadListenerPatterns", "");
             builder.pop();
 
             builder.comment("Startup optimizations")
                     .translation("lightload.configuration.section.startup").push("startup");
-            lazyDataFixer = builder.translation("lightload.configuration.startup.lazyDataFixer").define("lazyDataFixer", true);
+            lazyDataFixer = builder.translation("lightload.configuration.startup.lazyDataFixer").define("lazyDataFixer", false);
             progressiveModelWarmup = builder.translation("lightload.configuration.startup.progressiveModelWarmup").define("progressiveModelWarmup", true);
             fastTextureStitching = builder.translation("lightload.configuration.startup.fastTextureStitching").define("fastTextureStitching", true);
             lazyBlockStateCache = builder.translation("lightload.configuration.startup.lazyBlockStateCache").define("lazyBlockStateCache", true);

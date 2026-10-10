@@ -27,7 +27,8 @@ public final class ReloadExecutorManager {
 
     static ExecutorService create(int configuredThreads) {
         int available = Runtime.getRuntime().availableProcessors();
-        int parallelism = configuredThreads > 0 ? configuredThreads : Math.max(2, Math.min(available - 2, 16));
+        int parallelism = configuredThreads > 0 ? configuredThreads
+                : Math.max(2, Math.min(Math.max(1, available / 2), 8));
         parallelism = Math.max(1, parallelism);
         ClassLoader loader = ReloadExecutorManager.class.getClassLoader();
         AtomicInteger number = new AtomicInteger();

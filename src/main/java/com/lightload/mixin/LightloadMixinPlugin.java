@@ -89,7 +89,9 @@ public final class LightloadMixinPlugin implements IMixinConfigPlugin {
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         if (Boolean.getBoolean("lightload.disable")) return false;
         if ("com.lightload.mixin.compat.LightspeedMainMixin".equals(mixinClassName)) {
-            return CompatibilityManager.modernFixPresent() && CompatibilityManager.lightspeedPresent();
+            return CompatibilityManager.modernFixPresent()
+                    && CompatibilityManager.lightspeedPresent()
+                    && !CompatibilityManager.lightspeedOwnsLightloadInterop();
         }
         if (CABLE_FACADES_MIXIN.equals(mixinClassName)) {
             return CompatibilityManager.cableFacadesPresent();

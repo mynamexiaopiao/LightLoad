@@ -19,9 +19,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Supplier;
+import java.util.function.Predicate;
 
 /** Ordered parallel lookup for immutable vanilla and NeoForge mod resource packs. */
 public final class ResourceLookupOptimizer {
+    private static final int LOOKUP_BATCH_SIZE = 8;
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
     private static final LongAdder PARALLEL_LOOKUPS = new LongAdder();
     private static volatile ExecutorService executor;
@@ -53,6 +55,20 @@ public final class ResourceLookupOptimizer {
         return new LookupResult(result.index(), result.value());
     }
 
+    /** Looks up a segment already classified as safe by FallbackResourceManagerMixin. */
+    public static LookupResult findFirstSafe(List<PackResources> packs, PackType type,
+                                             ResourceLocation location) {
+        if (packs == null || packs.isEmpty()) return null;
+        int threshold = StartupCoordinator.config().parallelLookupMinPacks();
+        if (!enabled() || packs.size() < threshold) return sequential(packs, type, location);
+        List<Supplier<IoSupplier<InputStream>>> lookups = new ArrayList<>(packs.size());
+        for (PackResources pack : packs) lookups.add(() -> pack.getResource(type, location));
+        OrderedResult<IoSupplier<InputStream>> result = findFirstOrdered(lookups, threshold, executor());
+        if (result == null) return null;
+        PARALLEL_LOOKUPS.increment();
+        return new LookupResult(result.index(), result.value());
+    }
+
     public static long parallelLookups() {
         return PARALLEL_LOOKUPS.sum();
     }
@@ -62,20 +78,26 @@ public final class ResourceLookupOptimizer {
         if (lookups.isEmpty()) return null;
         if (lookups.size() < threshold) return sequentialOrdered(lookups);
 
-        List<CompletableFuture<T>> futures = new ArrayList<>(lookups.size());
-        try {
-            for (Supplier<T> lookup : lookups) {
-                futures.add(CompletableFuture.supplyAsync(lookup, executor));
+        for (int start = 0; start < lookups.size(); start += LOOKUP_BATCH_SIZE) {
+            int end = Math.min(lookups.size(), start + LOOKUP_BATCH_SIZE);
+            List<CompletableFuture<T>> futures = new ArrayList<>(end - start);
+            try {
+                for (int index = start; index < end; index++) {
+                    futures.add(CompletableFuture.supplyAsync(lookups.get(index), executor));
+                }
+                for (int offset = 0; offset < futures.size(); offset++) {
+                    T value = futures.get(offset).join();
+                    if (value != null) {
+                        futures.forEach(future -> future.cancel(true));
+                        return new OrderedResult<>(start + offset, value);
+                    }
+                }
+            } catch (RuntimeException exception) {
+                futures.forEach(future -> future.cancel(true));
+                return sequentialOrdered(lookups);
             }
-            for (int index = 0; index < futures.size(); index++) {
-                T value = futures.get(index).join();
-                if (value != null) return new OrderedResult<>(index, value);
-            }
-            return null;
-        } catch (RuntimeException exception) {
-            futures.forEach(future -> future.cancel(false));
-            return sequentialOrdered(lookups);
         }
+        return null;
     }
 
     private static LookupResult sequential(List<PackResources> packs, PackType type, ResourceLocation location) {
@@ -108,7 +130,8 @@ public final class ResourceLookupOptimizer {
         synchronized (ResourceLookupOptimizer.class) {
             current = executor;
             if (current == null) {
-                int workers = Math.max(2, Math.min(Runtime.getRuntime().availableProcessors(), 16));
+                int workers = Math.max(2, Math.min(Math.max(1,
+                        Runtime.getRuntime().availableProcessors() / 2), 8));
                 current = Executors.newFixedThreadPool(workers, runnable -> {
                     Thread thread = new Thread(runnable, "Lightload-Resource-" + THREAD_ID.incrementAndGet());
                     thread.setDaemon(true);
@@ -123,6 +146,23 @@ public final class ResourceLookupOptimizer {
     }
 
     public record LookupResult(int index, IoSupplier<InputStream> resource) {
+    }
+
+    /** Lookup plan data lives outside the mixin package so transformed game code can load it safely. */
+    public sealed interface LookupStep permits SafeSegment, Barrier {
+    }
+
+    public record IndexedPack(int index, PackResources pack) {
+    }
+
+    public record SafeSegment(List<IndexedPack> indexed, List<PackResources> packs) implements LookupStep {
+    }
+
+    public record Barrier(int index, PackResources pack, String name,
+                          Predicate<ResourceLocation> filter) implements LookupStep {
+        public boolean isFiltered(ResourceLocation location) {
+            return filter != null && filter.test(location);
+        }
     }
 
     record OrderedResult<T>(int index, T value) {

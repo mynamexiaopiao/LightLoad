@@ -19,7 +19,9 @@ public final class LazyBlockStateCache {
         boolean computed = StartupCoordinator.aggressiveOptimizationsEnabled()
                 && StartupCoordinator.config().lazyBlockStateCache()
                 && !CompatibilityManager.modernFixPresent();
-        enabled = computed;
+        // Registry baking can call this before the client config is loaded. Do not
+        // permanently cache that temporary default result.
+        if (StartupCoordinator.initialized()) enabled = computed;
         return computed;
     }
 

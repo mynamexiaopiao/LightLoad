@@ -55,7 +55,7 @@
   "lightload.configuration.resources.isolateModdedResourceReloadFailures": "隔离模组重载错误",
   "lightload.configuration.resources.isolateModdedResourceReloadFailures.tooltip": "避免选定的可选模组监听器错误导致整个资源重载失败。",
   "lightload.configuration.resources.isolatedResourceReloadListenerPatterns": "隔离监听器规则",
-  "lightload.configuration.resources.isolatedResourceReloadListenerPatterns.tooltip": "以逗号分隔的监听器类名规则；星号表示所有可选模组监听器。",
+  "lightload.configuration.resources.isolatedResourceReloadListenerPatterns.tooltip": "以逗号分隔的监听器类名规则；留空可关闭异常隔离。",
 
   "lightload.configuration.startup.lazyDataFixer": "延迟 DataFixer",
   "lightload.configuration.startup.lazyDataFixer.tooltip": "请求延迟初始化 DataFixer。此优化不适用于 Minecraft 1.21.1，因此会保持安全禁用。",

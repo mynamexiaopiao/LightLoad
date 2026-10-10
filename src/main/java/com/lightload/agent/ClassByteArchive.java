@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.channels.FileChannel;
 import java.util.zip.DataFormatException;
 import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
@@ -38,7 +39,8 @@ final class ClassByteArchive {
     private final Path basePath;
     private final String fingerprint;
     private final Map<String, Map<String, Segment>> cached;
-    private final byte[] expanded;
+    private final ByteBuffer compressed;
+    private volatile byte[] expanded;
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, byte[]>> recorded =
             new ConcurrentHashMap<>();
     private final Map<ModuleReference, String> moduleKeys = Collections.synchronizedMap(new IdentityHashMap<>());
@@ -48,10 +50,11 @@ final class ClassByteArchive {
     private volatile boolean recordingEnabled;
 
     private ClassByteArchive(Path basePath, String fingerprint, Map<String, Map<String, Segment>> cached,
-                             byte[] expanded, boolean recordingEnabled) {
+                             ByteBuffer compressed, byte[] expanded, boolean recordingEnabled) {
         this.basePath = basePath;
         this.fingerprint = fingerprint;
         this.cached = cached;
+        this.compressed = compressed;
         this.expanded = expanded;
         this.recordingEnabled = recordingEnabled;
     }
@@ -72,7 +75,7 @@ final class ClassByteArchive {
                 System.setProperty("lightload.runtimePatch.classArchiveDetail", throwable.toString());
             }
         }
-        ClassByteArchive archive = new ClassByteArchive(basePath, fingerprint, Map.of(), null, true);
+        ClassByteArchive archive = new ClassByteArchive(basePath, fingerprint, Map.of(), null, null, true);
         archive.publish("recording");
         return archive;
     }
@@ -88,6 +91,7 @@ final class ClassByteArchive {
         hits.increment();
         publishCounters();
         if (segment.length == 0) return EMPTY_BYTES;
+        byte[] expanded = expandedBytes();
         byte[] result = new byte[segment.length];
         System.arraycopy(expanded, segment.offset, result, 0, result.length);
         return result;
@@ -139,8 +143,11 @@ final class ClassByteArchive {
     private static ClassByteArchive read(Path basePath, Path path, String expectedFingerprint) throws IOException {
         long size = Files.size(path);
         if (size < 16 || size > MAX_FILE_BYTES) throw new IOException("Invalid class archive size: " + size);
-        byte[] archive = Files.readAllBytes(path);
-        ByteBuffer input = ByteBuffer.wrap(archive);
+        ByteBuffer archive;
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+            archive = channel.map(FileChannel.MapMode.READ_ONLY, 0, size);
+        }
+        ByteBuffer input = archive.duplicate();
         if (input.getInt() != MAGIC || input.getInt() != SCHEMA) {
             throw new IOException("Unsupported class byte archive");
         }
@@ -161,18 +168,42 @@ final class ClassByteArchive {
             pending.add(new PendingSegment(module, className, length));
         }
         int dataStart = input.position();
-        if (dataStart >= archive.length && dataBytes != 0) throw new IOException("Missing class byte data");
-        byte[] expanded = inflate(archive, dataStart, archive.length - dataStart, (int) dataBytes);
+        if (dataStart >= archive.limit() && dataBytes != 0) throw new IOException("Missing class byte data");
+        ByteBuffer compressed = archive.duplicate();
+        compressed.position(dataStart).limit(archive.limit());
         Map<String, Map<String, Segment>> modulesByKey = new HashMap<>(moduleCount);
-        int offset = dataStart;
+        int offset = 0;
         for (PendingSegment entry : pending) {
             modulesByKey.computeIfAbsent(normalizeStoredModuleKey(modules.get(entry.module)), ignored -> new HashMap<>())
-                    .put(entry.className, new Segment(offset - dataStart, entry.length));
+                    .put(entry.className, new Segment(offset, entry.length));
             offset += entry.length;
         }
         Map<String, Map<String, Segment>> immutable = new HashMap<>(modulesByKey.size());
         modulesByKey.forEach((module, classes) -> immutable.put(module, Map.copyOf(classes)));
-        return new ClassByteArchive(basePath, expectedFingerprint, Map.copyOf(immutable), expanded, false);
+        return new ClassByteArchive(basePath, expectedFingerprint, Map.copyOf(immutable), compressed.slice(), null, false);
+    }
+
+    private byte[] expandedBytes() {
+        byte[] value = expanded;
+        if (value != null) return value;
+        synchronized (this) {
+            value = expanded;
+            if (value == null) {
+                ByteBuffer input = compressed.duplicate();
+                byte[] compressedBytes = new byte[input.remaining()];
+                input.get(compressedBytes);
+                int rawLength = cached.values().stream()
+                        .flatMap(classes -> classes.values().stream())
+                        .mapToInt(segment -> segment.length).sum();
+                try {
+                    value = inflate(compressedBytes, 0, compressedBytes.length, rawLength);
+                } catch (IOException exception) {
+                    throw new IllegalStateException("Invalid compressed class archive", exception);
+                }
+                expanded = value;
+            }
+            return value;
+        }
     }
 
     private void writeAlternate() throws IOException {
@@ -405,5 +436,3 @@ final class ClassByteArchive {
     private static final class FingerprintMismatch extends IOException {
     }
 }
-
-

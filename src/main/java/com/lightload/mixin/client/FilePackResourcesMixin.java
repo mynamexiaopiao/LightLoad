@@ -1,5 +1,6 @@
 package com.lightload.mixin.client;
 
+import com.lightload.cache.ZipResourceIndexStore;
 import com.lightload.core.FusionPackCompat;
 import com.lightload.core.StartupCoordinator;
 import net.minecraft.resources.ResourceLocation;
@@ -39,20 +40,17 @@ public abstract class FilePackResourcesMixin {
         if (!StartupCoordinator.optimizationsActive() || FusionPackCompat.hasOverrides(this)) return;
         ZipFile zip = lightload$openZip();
         if (zip == null) return;
-        String namespaceRoot = type.getDirectory() + "/" + namespace + "/";
+        String namespaceRoot = lightload$addPrefix(type.getDirectory() + "/" + namespace + "/");
         String requestedRoot = namespaceRoot + (path.isEmpty() ? "" : path + "/");
-        List<String> entries = lightload$entriesByType().computeIfAbsent(type, ignored -> zip.stream()
-                .filter(entry -> !entry.isDirectory())
-                .map(ZipEntry::getName)
-                .sorted()
-                .toList());
+        List<String> entries = lightload$entriesByType().computeIfAbsent(type,
+                ignored -> lightload$loadEntries(type, zip));
         int first = Collections.binarySearch(entries, requestedRoot);
         if (first < 0) first = -first - 1;
         for (int index = first; index < entries.size(); index++) {
             String entry = entries.get(index);
             if (!entry.startsWith(requestedRoot)) break;
             ResourceLocation location = ResourceLocation.tryBuild(namespace, entry.substring(namespaceRoot.length()));
-            if (location != null) output.accept(location, lightload$openResource(type, location));
+            if (location != null) output.accept(location, lightload$openResource(location, entry));
         }
         ci.cancel();
     }
@@ -68,15 +66,19 @@ public abstract class FilePackResourcesMixin {
     }
 
     @Unique
-    private IoSupplier<InputStream> lightload$openResource(PackType type, ResourceLocation location) {
+    private IoSupplier<InputStream> lightload$openResource(ResourceLocation location, String entryPath) {
         return () -> {
             ZipFile zip = lightload$openZip();
             if (zip == null) throw new FileNotFoundException(location.toString());
-            String path = type.getDirectory() + "/" + location.getNamespace() + "/" + location.getPath();
-            ZipEntry entry = zip.getEntry(prefix.isEmpty() ? path : prefix + "/" + path);
+            ZipEntry entry = zip.getEntry(entryPath);
             if (entry == null) throw new FileNotFoundException(location.toString());
             return zip.getInputStream(entry);
         };
+    }
+
+    @Unique
+    private String lightload$addPrefix(String path) {
+        return prefix.isEmpty() ? path : prefix + "/" + path;
     }
 
     @Unique
@@ -97,5 +99,18 @@ public abstract class FilePackResourcesMixin {
             if (lightload$entriesByType == null) lightload$entriesByType = new ConcurrentHashMap<>();
             return lightload$entriesByType;
         }
+    }
+
+    @Unique
+    private List<String> lightload$loadEntries(PackType type, ZipFile zip) {
+        FilePackResourcesSharedZipAccessor access = (FilePackResourcesSharedZipAccessor) zipFileAccess;
+        String archive = ZipResourceIndexStore.fingerprint(access.lightload$file(), prefix);
+        List<String> cached = ZipResourceIndexStore.find(StartupCoordinator.cacheDirectory(), archive, type.name());
+        if (cached != null) return cached;
+        List<String> scanned = zip.stream().filter(entry -> !entry.isDirectory())
+                .map(ZipEntry::getName).sorted().toList();
+        ZipResourceIndexStore.record(StartupCoordinator.cacheDirectory(), archive, type.name(), scanned);
+        ZipResourceIndexStore.persistAsync(StartupCoordinator.cacheDirectory());
+        return scanned;
     }
 }

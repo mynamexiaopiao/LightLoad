@@ -74,7 +74,7 @@ public final class ResourceIndexCache {
     private final AtomicLong pathIndexMisses = new AtomicLong();
     private final AtomicLong asyncScans = new AtomicLong();
     private final ExecutorService loader = Executors.newFixedThreadPool(
-            Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() / 4)), runnable -> {
+            Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors() / 2)), runnable -> {
         Thread thread = new Thread(runnable, "lightload-cache-loader");
         thread.setDaemon(true);
         thread.setPriority(Thread.NORM_PRIORITY - 1);

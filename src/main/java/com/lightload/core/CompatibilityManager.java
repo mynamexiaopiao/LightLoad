@@ -16,6 +16,9 @@ public final class CompatibilityManager {
     private static volatile Boolean waterMediaYoutubePresent;
     private static volatile Boolean fabricResourceLoaderPresent;
 
+    private static final String LIGHTSPEED_LIGHTLOAD_COMPAT_MIXIN =
+            "com.ccr4ft3r.lightspeed.mixin.compat.LightLoadCacheFlagsMixin";
+
     private CompatibilityManager() {
     }
 
@@ -163,7 +166,17 @@ public final class CompatibilityManager {
 
     public static boolean lightspeedModernFixInteropEnabled(LightloadConfig config) {
         return config.lightspeedModernFixInterop()
-                && optimizationProfile(config) == OptimizationProfile.MODERNFIX_LIGHTSPEED_STACK;
+                && optimizationProfile(config) == OptimizationProfile.MODERNFIX_LIGHTSPEED_STACK
+                && !lightspeedOwnsLightloadInterop();
+    }
+
+    /**
+     * Recent LightSpeedRe releases preserve their cache flags through a dedicated
+     * LightLoad compatibility mixin. Do not run the legacy reflection bridge in
+     * that case; it only causes the two mods to negotiate the same flags twice.
+     */
+    public static boolean lightspeedOwnsLightloadInterop() {
+        return lightspeedPresent() && classPresent(LIGHTSPEED_LIGHTLOAD_COMPAT_MIXIN);
     }
 
     public static boolean isLoaded(String modId) {

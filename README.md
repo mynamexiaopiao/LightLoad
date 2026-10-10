@@ -19,33 +19,33 @@ require a separate `-javaagent` or companion bootstrap JAR.
 
 ## Configuration
 
-The first client run creates `config/lightload.properties`:
+The first client run creates `config/lightload-client.toml`:
 
-```properties
+```toml
 enabled=true
 memoryCache=true
 persistentCache=true
 profiling=true
 showLoadingTime=true
-cacheResourceRoutes=true
+cacheResourceRoutes=false
 cacheResourceExistence=true
 maxExistenceCacheMiB=256
-cacheResourceContent=true
+cacheResourceContent=false
 maxContentCacheMiB=256
 maxCachedResourceKiB=1024
 parallelResourceLookup=true
-parallelLookupMinPacks=4
+parallelLookupMinPacks=16
 isolateModdedResourceReloadFailures=true
-isolatedResourceReloadListenerPatterns=*
+isolatedResourceReloadListenerPatterns=
 connectorCompatibilityMode=true
 aggressiveStartup=true
 dedicatedReloadExecutor=true
 reloadThreads=0
-lazyDataFixer=true
+lazyDataFixer=false
 progressiveModelWarmup=true
 fastTextureStitching=true
 earlyAgent=true
-parallelJarJarMetadata=true
+parallelJarJarMetadata=false
 jarJarThreads=4
 lightspeedModernFixInterop=true
 optimizationProfile=auto
@@ -67,7 +67,8 @@ The path index records namespaces and relative resource paths after a non-blocki
 replays them on later reloads and launches. Route and existence caches avoid losing pack probes;
 the content cache stores only bounded text resources such as JSON, metadata, language files, and
 shaders. Every persistent entry is tied to the mod JAR fingerprint and stored in a checked binary
-format. When ModernFix is installed, Lightload avoids overlapping resource/model layers. When
+format. ZIP resource entry indexes use the archive path, size, modification time, and overlay prefix
+as their fingerprint and are written atomically after startup. When ModernFix is installed, Lightload avoids overlapping resource/model layers. When
 Forgified Fabric API is installed, Lightload preserves its identity-sensitive reload listener sorting
 while retaining the remaining startup and resource optimizations. When LightspeedRe is installed,
 duplicate Lightspeed-compatible mixins are skipped.

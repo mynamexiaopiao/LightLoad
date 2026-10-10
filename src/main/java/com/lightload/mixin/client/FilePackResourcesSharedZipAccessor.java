@@ -6,6 +6,7 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 import org.spongepowered.asm.mixin.gen.Invoker;
 
 import javax.annotation.Nullable;
+import java.io.File;
 import java.util.zip.ZipFile;
 
 @Mixin(FilePackResources.SharedZipFileAccess.class)
@@ -16,4 +17,7 @@ public interface FilePackResourcesSharedZipAccessor {
 
     @Accessor("zipFile")
     void lightload$setZipFile(@Nullable ZipFile zipFile);
+
+    @Accessor("file")
+    File lightload$file();
 }

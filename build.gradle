@@ -273,6 +273,10 @@ def agentShadowJar = tasks.register('agentShadowJar', com.github.jengelman.gradl
 }
 
 tasks.named('shadowJar', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar).configure {
+    // The embedded GAME layer must use the processed resources. Without this
+    // dependency a stale payload can retain ${...} placeholders in
+    // META-INF/neoforge.mods.toml and NeoForge rejects it during mod scan.
+    dependsOn tasks.named('processResources')
     archiveClassifier = 'game-internal'
     destinationDirectory = layout.buildDirectory.dir('tmp/gamePayload')
     configurations = []
@@ -324,6 +328,9 @@ tasks.register('verifyShadowIsolation') {
         try {
             def transformerEntry = jar.getJarEntry('com/lightload/agent/JarInJarTransformer.class')
             if (transformerEntry == null) throw new GradleException('Agent transformer is missing from the final JAR')
+            if (jar.stream().anyMatch { it.name.startsWith('com/lightload/cache/') }) {
+                throw new GradleException('Bootstrap JAR must not contain GAME-layer com.lightload.cache classes')
+            }
             def transformerBytes = jar.getInputStream(transformerEntry).readAllBytes()
             def transformerConstants = new String(transformerBytes, java.nio.charset.StandardCharsets.ISO_8859_1)
             if (!transformerConstants.contains('com/lightload/shadow/asm/ClassReader')) {
@@ -342,8 +349,23 @@ tasks.register('verifyShadowIsolation') {
                 }
                 if (!names.contains('META-INF/neoforge.mods.toml') ||
                         !names.contains('com/lightload/LightloadMod.class') ||
-                        names.any { it.startsWith('com/lightload/agent/') || it.startsWith('com/lightload/bootstrap/') }) {
+                        names.any { it.startsWith('com/lightload/agent/') || it.startsWith('com/lightload/bootstrap/') ||
+                                (it.startsWith('com/lightload/mixin/') && it.contains('$')) }) {
                     throw new GradleException('Embedded GAME payload has invalid layer contents')
+                }
+                def metadata = new java.util.jar.JarInputStream(new java.io.ByteArrayInputStream(payloadBytes))
+                try {
+                    for (def entry = metadata.nextJarEntry; entry != null; entry = metadata.nextJarEntry) {
+                        if (entry.name == 'META-INF/neoforge.mods.toml') {
+                            def toml = new String(metadata.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+                            if (toml.contains('${')) {
+                                throw new GradleException('Embedded GAME metadata contains unresolved template properties')
+                            }
+                            break
+                        }
+                    }
+                } finally {
+                    metadata.close()
                 }
             } finally {
                 payloadInput.close()
