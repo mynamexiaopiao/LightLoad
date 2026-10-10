@@ -18,6 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /** Ordered parallel lookup for immutable vanilla and Forge mod resource packs. */
@@ -50,6 +51,20 @@ public final class ResourceLookupOptimizer {
         for (PackResources pack : packs) {
             lookups.add(() -> pack.getResource(type, location));
         }
+        OrderedResult<IoSupplier<InputStream>> result = findFirstOrdered(lookups, threshold, executor());
+        if (result == null) return null;
+        PARALLEL_LOOKUPS.increment();
+        return new LookupResult(result.index(), result.value());
+    }
+
+    /** Looks up a segment already classified as safe by FallbackResourceManagerMixin. */
+    public static LookupResult findFirstSafe(List<PackResources> packs, PackType type,
+                                             ResourceLocation location) {
+        if (packs == null || packs.isEmpty()) return null;
+        int threshold = StartupCoordinator.config().parallelLookupMinPacks();
+        if (!enabled() || packs.size() < threshold) return sequential(packs, type, location);
+        List<Supplier<IoSupplier<InputStream>>> lookups = new ArrayList<>(packs.size());
+        for (PackResources pack : packs) lookups.add(() -> pack.getResource(type, location));
         OrderedResult<IoSupplier<InputStream>> result = findFirstOrdered(lookups, threshold, executor());
         if (result == null) return null;
         PARALLEL_LOOKUPS.increment();
@@ -139,6 +154,23 @@ public final class ResourceLookupOptimizer {
     }
 
     public record LookupResult(int index, IoSupplier<InputStream> resource) {
+    }
+
+    /** Lookup plan data lives outside the mixin package so transformed game code can load it safely. */
+    public sealed interface LookupStep permits SafeSegment, Barrier {
+    }
+
+    public record IndexedPack(int index, PackResources pack) {
+    }
+
+    public record SafeSegment(List<IndexedPack> indexed, List<PackResources> packs) implements LookupStep {
+    }
+
+    public record Barrier(int index, PackResources pack, String name,
+                          Predicate<ResourceLocation> filter) implements LookupStep {
+        public boolean isFiltered(ResourceLocation location) {
+            return filter != null && filter.test(location);
+        }
     }
 
     record OrderedResult<T>(int index, T value) {

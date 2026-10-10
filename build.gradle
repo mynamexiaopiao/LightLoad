@@ -293,6 +293,10 @@ def bootstrapJar = tasks.register('bootstrapJar', Jar) {
 
 tasks.named('shadowJar', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar).configure {
     dependsOn agentShadowJar
+    // The embedded GAME layer must use the processed resources. Without this
+    // dependency a stale payload can retain ${...} placeholders in
+    // META-INF/mods.toml and Forge rejects it during mod scan.
+    dependsOn tasks.named('processResources')
     archiveClassifier = 'game-internal'
     destinationDirectory = layout.buildDirectory.dir('tmp/gamePayload')
     configurations = []
@@ -334,6 +338,15 @@ tasks.register('verifyShadowIsolation') {
         try {
             def transformerEntry = bootstrapArchive.getJarEntry('com/lightload/agent/JarInJarTransformer.class')
             if (transformerEntry == null) throw new GradleException('Agent transformer is missing from the final JAR')
+            if (bootstrapArchive.stream().anyMatch {
+                it.name.startsWith('com/lightload/cache/') ||
+                        it.name.startsWith('com/lightload/config/') ||
+                        it.name.startsWith('com/lightload/core/') ||
+                        it.name.startsWith('com/lightload/mixin/') ||
+                        it.name == 'com/lightload/LightloadMod.class'
+            }) {
+                throw new GradleException('Bootstrap JAR must not contain GAME-layer classes')
+            }
             def transformerBytes = bootstrapArchive.getInputStream(transformerEntry).readAllBytes()
             def transformerConstants = new String(transformerBytes, java.nio.charset.StandardCharsets.ISO_8859_1)
             if (!transformerConstants.contains('com/lightload/shadow/asm/ClassReader')) {
@@ -350,8 +363,23 @@ tasks.register('verifyShadowIsolation') {
                 }
                 if (!names.contains('META-INF/mods.toml') ||
                         !names.contains('com/lightload/LightloadMod.class') ||
-                        names.any { it.startsWith('com/lightload/agent/') || it.startsWith('com/lightload/bootstrap/') }) {
+                        names.any { it.startsWith('com/lightload/agent/') || it.startsWith('com/lightload/bootstrap/') ||
+                                (it.startsWith('com/lightload/mixin/') && it.contains('$')) }) {
                     throw new GradleException('Embedded GAME payload has invalid layer contents')
+                }
+                def metadata = new java.util.jar.JarInputStream(new java.io.ByteArrayInputStream(payloadBytes))
+                try {
+                    for (def entry = metadata.nextJarEntry; entry != null; entry = metadata.nextJarEntry) {
+                        if (entry.name == 'META-INF/mods.toml') {
+                            def toml = new String(metadata.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+                            if (toml.contains('${')) {
+                                throw new GradleException('Embedded GAME metadata contains unresolved template properties')
+                            }
+                            break
+                        }
+                    }
+                } finally {
+                    metadata.close()
                 }
             } finally {
                 payloadInput.close()

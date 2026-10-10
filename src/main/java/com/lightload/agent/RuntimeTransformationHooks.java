@@ -168,7 +168,7 @@ public final class RuntimeTransformationHooks {
 
     static String runtimeClassByteFingerprint(Path gameDirectory, String classPath) throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        updateDigest(digest, "lightload-runtime-classpath-v1");
+        updateDigest(digest, "lightload-runtime-classpath-v2");
         updateDigest(digest, System.getProperty("java.runtime.version", "unknown"));
 
         List<Path> roots = new ArrayList<>();
@@ -179,10 +179,24 @@ public final class RuntimeTransformationHooks {
             }
         }
         Path mods = gameDirectory == null ? null : gameDirectory.resolve("mods");
-        if (mods != null && Files.isDirectory(mods)) roots.add(mods);
+        if (mods != null && Files.isDirectory(mods)) {
+            updateDigest(digest, "mods-directory");
+            updateShallowDirectoryDigest(digest, mods);
+        }
         roots.sort(Comparator.comparing(path -> path.toAbsolutePath().normalize().toString()));
         for (Path root : roots) updatePathDigest(digest, root);
         return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static void updateShallowDirectoryDigest(MessageDigest digest, Path directory) throws IOException {
+        List<Path> files;
+        try (var stream = Files.list(directory)) {
+            files = stream.filter(Files::isRegularFile)
+                    .sorted(Comparator.comparing(path -> path.getFileName().toString()))
+                    .toList();
+        }
+        updateDigest(digest, Integer.toString(files.size()));
+        for (Path file : files) updateFileDigest(digest, file, file.getFileName().toString());
     }
 
     private static void updatePathDigest(MessageDigest digest, Path root) throws IOException {

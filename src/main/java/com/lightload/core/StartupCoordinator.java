@@ -25,6 +25,7 @@ public final class StartupCoordinator {
     private static final AtomicLong STARTUP_FINISHED = new AtomicLong();
     private static volatile LightloadConfig config = new LightloadConfig(false, false, false, false, false, 0);
     private static volatile ResourceIndexCache cache;
+    private static volatile Path cacheDirectory;
     private static volatile Path startupLock;
     private static volatile Path warmupLock;
     private static volatile boolean recoveryMode;
@@ -39,6 +40,7 @@ public final class StartupCoordinator {
         if (!INITIALIZED.compareAndSet(false, true)) return;
         Path gameDirectory = FMLPaths.GAMEDIR.get();
         Path cacheDirectory = gameDirectory.resolve("cache").resolve("lightload");
+        StartupCoordinator.cacheDirectory = cacheDirectory;
         startupLock = cacheDirectory.resolve("startup.lock");
         warmupLock = cacheDirectory.resolve("warmup.lock");
         config = LightloadConfig.load(FMLPaths.CONFIGDIR.get());
@@ -95,6 +97,11 @@ public final class StartupCoordinator {
     public static ResourceIndexCache cache() {
         if (!INITIALIZED.get()) initialize();
         return cache;
+    }
+
+    public static Path cacheDirectory() {
+        initialize();
+        return cacheDirectory;
     }
 
     public static boolean shouldShowLoadingTime() {
